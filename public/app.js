@@ -519,15 +519,39 @@
       ui.stBusy = false; render();
     }
   }
-  function statsTable(title, carriers, answered, ivr, lost) {
-    const n = carriers.length;
+  // сума кількох діб у тій самій формі, що й одна доба
+  function sumDays(days) {
+    const byName = (list) => { const m = new Map(); for (const c of list) { const s = m.get(c.name) || { name: c.name, answered: 0, ivr: 0 }; s.answered += c.answered; s.ivr += c.ivr; m.set(c.name, s); } return m; };
+    const names = [...byName(days.flatMap((d) => d.carriers)).keys()];
+    const pick = (m) => names.map((n) => m.get(n) || { name: n, answered: 0, ivr: 0 });
+    const lines = days[0].lines.map((l0, i) => {
+      const ls = days.map((d) => d.lines[i]);
+      const carriers = pick(byName(ls.flatMap((l) => l.carriers)));
+      return { id: l0.id, title: l0.title, carriers, answered: ls.reduce((a, l) => a + l.answered, 0), ivr: ls.reduce((a, l) => a + l.ivr, 0), lost: ls.reduce((a, l) => a + l.lost, 0) };
+    });
+    const carriers = pick(byName(days.flatMap((d) => d.carriers)));
+    return { lines, carriers, answered: days.reduce((a, d) => a + d.answered, 0), ivr: days.reduce((a, d) => a + d.ivr, 0), lost: days.reduce((a, d) => a + d.lost, 0) };
+  }
+
+  // Таблиця доби: рядки — оператори зв'язку; групи колонок — кожна лінія і «Усі лінії»
+  function statsTable(title, d) {
+    const n = d.carriers.length;
+    const groups = d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost, cls: '' }))
+      .concat([{ title: 'Усі лінії', rows: d.carriers, answered: d.answered, ivr: d.ivr, lost: d.lost, cls: ' st-all' }]);
+    const cell = (g, i) => {
+      const r = g.rows.find((x) => x.name === d.carriers[i].name) || { answered: 0, ivr: 0 };
+      return `<td class="st-g${g.cls}">${r.answered}</td><td class="${g.cls.trim()}">${r.ivr}</td>${i === 0 ? `<td rowspan="${n}" class="st-lost${g.cls}">${g.lost}</td>` : ''}`;
+    };
     return `<section class="card st-card" aria-label="${esc(title)}">
       <div class="card-h"><h2>${esc(title)}</h2></div>
-      <table class="st-table num">
-        <thead><tr><th></th><th>Прийнято</th><th>Прослухані IVR та втрачені</th><th>Втрачені</th></tr></thead>
-        <tbody>${carriers.map((c, i) => `<tr><td class="st-name">${esc(c.name)}</td><td>${c.answered}</td><td>${c.ivr}</td>${i === 0 ? `<td rowspan="${n}" class="st-lost">${lost}</td>` : ''}</tr>`).join('')}</tbody>
-        <tfoot><tr><td class="st-name">Всього:</td><td>${answered}</td><td>${ivr}</td><td>${lost}</td></tr></tfoot>
-      </table></section>`;
+      <div style="overflow-x:auto"><table class="st-table num">
+        <thead>
+          <tr><th rowspan="2"></th>${groups.map((g) => `<th colspan="3" class="st-g st-line${g.cls}">${esc(g.title)}</th>`).join('')}</tr>
+          <tr>${groups.map((g) => `<th class="st-g${g.cls}">Прийнято</th><th class="${g.cls.trim()}">Прослухані IVR та втрачені</th><th class="${g.cls.trim()}">Втрачені</th>`).join('')}</tr>
+        </thead>
+        <tbody>${d.carriers.map((c, i) => `<tr><td class="st-name">${esc(c.name)}</td>${groups.map((g) => cell(g, i)).join('')}</tr>`).join('')}</tbody>
+        <tfoot><tr><td class="st-name">Всього:</td>${groups.map((g) => `<td class="st-g${g.cls}">${g.answered}</td><td class="${g.cls.trim()}">${g.ivr}</td><td class="${g.cls.trim()}">${g.lost}</td>`).join('')}</tr></tfoot>
+      </table></div></section>`;
   }
   function statsView() {
     if (!ui.st && !ui.stBusy && !ui.stErr) { setTimeout(loadStats, 0); ui.stBusy = true; }
@@ -541,16 +565,8 @@
     else {
       const hh = `${p2(st.dayHour)}:00`;
       const days = st.days.slice().reverse();
-      if (days.length > 1) {
-        const sum = new Map();
-        for (const d of days) for (const c of d.carriers) {
-          const s = sum.get(c.name) || { name: c.name, answered: 0, ivr: 0 };
-          s.answered += c.answered; s.ivr += c.ivr; sum.set(c.name, s);
-        }
-        const tot = (f) => days.reduce((a, d) => a + d[f], 0);
-        body += statsTable(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, [...sum.values()], tot('answered'), tot('ivr'), tot('lost'));
-      }
-      body += days.map((d) => statsTable(`Доба ${dmy(d.day)} · ${hh} – ${hh} ${next(d.day)}`, d.carriers, d.answered, d.ivr, d.lost)).join('');
+      if (days.length > 1) body += statsTable(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, sumDays(days));
+      body += days.map((d) => statsTable(`Доба ${dmy(d.day)} · ${hh} – ${hh} ${next(d.day)}`, d)).join('');
     }
     const href = `/api/stats/export.xlsx?from=${esc(ui.stFrom || '')}&to=${esc(ui.stTo || '')}`;
     return `<div class="qhead"><div><h1>Статистика</h1>

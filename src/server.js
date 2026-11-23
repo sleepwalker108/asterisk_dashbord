@@ -156,6 +156,20 @@ function alertsWorkbook(hist) {
   ]);
 }
 
+// сума кількох діб у тій самій формі, що й одна доба (як sumDays у public/app.js)
+function sumDays(days) {
+  const byName = (list) => { const m = new Map(); for (const c of list) { const s = m.get(c.name) || { name: c.name, answered: 0, ivr: 0 }; s.answered += c.answered; s.ivr += c.ivr; m.set(c.name, s); } return m; };
+  const names = [...byName(days.flatMap((d) => d.carriers)).keys()];
+  const pick = (m) => names.map((n) => m.get(n) || { name: n, answered: 0, ivr: 0 });
+  const lines = days[0].lines.map((l0, i) => {
+    const ls = days.map((d) => d.lines[i]);
+    return { id: l0.id, title: l0.title, carriers: pick(byName(ls.flatMap((l) => l.carriers))),
+      answered: ls.reduce((a, l) => a + l.answered, 0), ivr: ls.reduce((a, l) => a + l.ivr, 0), lost: ls.reduce((a, l) => a + l.lost, 0) };
+  });
+  return { lines, carriers: pick(byName(days.flatMap((d) => d.carriers))),
+    answered: days.reduce((a, d) => a + d.answered, 0), ivr: days.reduce((a, d) => a + d.ivr, 0), lost: days.reduce((a, d) => a + d.lost, 0) };
+}
+
 // ---------- Excel: добова статистика по операторах зв'язку ----------
 function statsWorkbook(st) {
   const two = (n) => String(n).padStart(2, '0');
@@ -164,39 +178,53 @@ function statsWorkbook(st) {
   const hh = `${two(st.dayHour)}:00`;
   const B = (v, extra = {}) => ({ v, border: true, center: true, ...extra });
 
-  // «Зведення»: для кожної доби — таблиця як у ручному звіті
+  // групи колонок: кожна лінія + «Усі лінії»
+  const groupsOf = (d) => d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost }))
+    .concat([{ title: 'Усі лінії', rows: d.carriers, answered: d.answered, ivr: d.ivr, lost: d.lost }]);
+
+  // «Зведення»: для кожної доби — таблиця як у ручному звіті, з групами колонок по лініях
   const rows = [];
   const merges = [];
-  const block = (title, carriers, answered, ivr, lost) => {
+  const block = (title, d) => {
+    const groups = groupsOf(d);
+    const n = d.carriers.length;
     rows.push([{ v: title, bold: true }]);
-    rows.push([B(''), B('Прийнято', { bold: true }), B('Прослухані IVR та втрачені', { bold: true }), B('Втрачені', { bold: true })]);
+    const h1 = rows.length;
+    rows.push([B('')].concat(...groups.map((g) => [B(g.title, { bold: true }), B(''), B('')])));
+    rows.push([B('')].concat(...groups.map(() => [B('Прийнято', { bold: true }), B('Прослухані IVR та втрачені', { bold: true }), B('Втрачені', { bold: true })])));
+    merges.push(`${cellRef(h1, 0)}:${cellRef(h1 + 1, 0)}`);
+    groups.forEach((g, gi) => merges.push(`${cellRef(h1, 1 + gi * 3)}:${cellRef(h1, 3 + gi * 3)}`));
     const first = rows.length;
-    carriers.forEach((c, i) => rows.push([{ v: c.name, border: true, italic: true }, B(c.answered), B(c.ivr), B(i === 0 ? lost : '')]));
-    if (carriers.length > 1) merges.push(`${cellRef(first, 3)}:${cellRef(first + carriers.length - 1, 3)}`);
-    rows.push([{ v: 'Всього:', border: true, bold: true, italic: true }, B(answered, { bold: true }), B(ivr, { bold: true }), B(lost, { bold: true })]);
+    d.carriers.forEach((c, i) => {
+      const row = [{ v: c.name, border: true, italic: true }];
+      for (const g of groups) {
+        const r = g.rows.find((x) => x.name === c.name) || { answered: 0, ivr: 0 };
+        row.push(B(r.answered), B(r.ivr), B(i === 0 ? g.lost : ''));
+      }
+      rows.push(row);
+    });
+    if (n > 1) groups.forEach((g, gi) => merges.push(`${cellRef(first, 3 + gi * 3)}:${cellRef(first + n - 1, 3 + gi * 3)}`));
+    rows.push([{ v: 'Всього:', border: true, bold: true, italic: true }]
+      .concat(...groups.map((g) => [B(g.answered, { bold: true }), B(g.ivr, { bold: true }), B(g.lost, { bold: true })])));
     rows.push([]);
   };
-  if (st.days.length > 1) {
-    const sum = new Map();
-    for (const d of st.days) for (const c of d.carriers) {
-      const s = sum.get(c.name) || { name: c.name, answered: 0, ivr: 0 };
-      s.answered += c.answered; s.ivr += c.ivr; sum.set(c.name, s);
-    }
-    const tot = (f) => st.days.reduce((a, d) => a + d[f], 0);
-    block(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, [...sum.values()], tot('answered'), tot('ivr'), tot('lost'));
-  }
-  for (const d of st.days) block(`Доба ${dmy(d.day)} (${hh} – ${hh} ${nextDmy(d.day)})`, d.carriers, d.answered, d.ivr, d.lost);
+  if (st.days.length > 1) block(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, sumDays(st.days));
+  for (const d of st.days) block(`Доба ${dmy(d.day)} (${hh} – ${hh} ${nextDmy(d.day)})`, d);
 
   // «По днях»: плоска таблиця для фільтрів і графіків
-  const flat = [['Дата', 'Оператор зв\'язку', 'Прийнято', 'Прослухані IVR та втрачені', 'Втрачені в черзі']];
+  const flat = [['Дата', 'Лінія', 'Оператор зв\'язку', 'Прийнято', 'Прослухані IVR та втрачені', 'Втрачені в черзі']];
   for (const d of st.days) {
-    for (const c of d.carriers) flat.push([dmy(d.day), c.name, c.answered, c.ivr, '']);
-    flat.push([{ v: dmy(d.day), bold: true }, { v: 'Всього', bold: true }, { v: d.answered, bold: true }, { v: d.ivr, bold: true }, { v: d.lost, bold: true }]);
+    for (const g of groupsOf(d)) {
+      for (const c of g.rows) flat.push([dmy(d.day), g.title, c.name, c.answered, c.ivr, '']);
+      flat.push([{ v: dmy(d.day), bold: true }, { v: g.title, bold: true }, { v: 'Всього', bold: true },
+        { v: g.answered, bold: true }, { v: g.ivr, bold: true }, { v: g.lost, bold: true }]);
+    }
   }
 
+  const ng = st.lines.length + 1;
   return buildXlsx([
-    { name: 'Зведення', rows, merges, widths: [24, 14, 26, 12], freeze: false, headerBold: false },
-    { name: 'По днях', rows: flat, widths: [12, 18, 12, 26, 16] },
+    { name: 'Зведення', rows, merges, widths: [16].concat(...Array.from({ length: ng }, () => [11, 17, 10])), freeze: false, headerBold: false },
+    { name: 'По днях', rows: flat, widths: [12, 16, 18, 12, 26, 16] },
   ]);
 }
 

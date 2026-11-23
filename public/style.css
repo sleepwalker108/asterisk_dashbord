@@ -109,7 +109,12 @@ main{max-width:1600px;margin:0 auto;padding:24px;display:flex;flex-direction:col
 .agrid{display:grid;grid-template-columns:.8fr .8fr .9fr .7fr .7fr 1fr .7fr;gap:12px;padding:12px 20px;align-items:center;border-bottom:1px solid var(--line)}
 
 /* вкладка «Статистика» — таблиці як у ручному звіті */
-.st-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px;align-items:start}
+.st-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+.st-table{min-width:980px}
+.st-table th.st-line{font-size:15px;font-weight:800;color:var(--text);background:color-mix(in srgb,var(--accent) 10%,var(--head))}
+.st-table .st-g{border-left:2px solid var(--border2)}
+.st-table .st-all{background:color-mix(in srgb,var(--accent) 6%,transparent);font-weight:700}
+.st-table th.st-all{color:var(--text)}
 .st-card{overflow:hidden}
 .st-table{width:100%;border-collapse:collapse;font-size:15px}
 .st-table th,.st-table td{border:1px solid var(--border);padding:8px 12px;text-align:center}

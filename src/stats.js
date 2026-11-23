@@ -269,40 +269,45 @@ Stats.prototype.dailyStats = async function dailyStats(fromDay, toDay) {
   const prefix = (this.cfg.trunkChannelPrefix || '') + '%';
   const from = sqlTime(start), to = sqlTime(end);
 
+  const lineByQueue = new Map(this.lines.map((l) => [l.queue, l.id]));
+  const lineByCtx = new Map(this.lines.map((l) => [l.context, l.id]));
+
+  // лічильники: days[day][lineId] = { answered: {code: n}, ivr: {code: n}, lost }
   const days = new Map();
   for (const d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
     const key = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-    days.set(key, { day: key, answered: {}, ivr: {}, lost: 0 });
+    days.set(key, Object.fromEntries(this.lines.map((l) => [l.id, { answered: {}, ivr: {}, lost: 0 }])));
   }
   const dayOfMs = (ms) => {
     const d = new Date(ms - h * 3600e3);
     return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
   };
-  const add = (dayKey, field, code, n) => {
-    const d = days.get(dayKey);
-    if (d) d[field][code] = (d[field][code] || 0) + n;
+  const slot = (dayKey, lineId) => (days.get(dayKey) || {})[lineId];
+  const add = (dayKey, lineId, field, code, n) => {
+    const s = slot(dayKey, lineId);
+    if (s) s[field][code] = (s[field][code] || 0) + n;
   };
 
-  // Прийнято: кожен CONNECT з queue_log, оператор зв'язку — з CDR цього ж дзвінка
+  // Прийнято: кожен CONNECT з queue_log (лінія — черга, де відповіли), оператор зв'язку — з CDR цього дзвінка
   const [acc] = await this.pool.query(
-    `SELECT DATE(q.time - INTERVAL ${h} HOUR) AS d, c.userfield AS uf, COUNT(DISTINCT q.callid) AS n
+    `SELECT DATE(q.time - INTERVAL ${h} HOUR) AS d, q.queuename AS qn, c.userfield AS uf, COUNT(DISTINCT q.callid) AS n
        FROM ${this.tQueueLog} q
        LEFT JOIN ${this.tCdr} c ON c.uniqueid = q.callid AND c.channel LIKE ?
       WHERE q.time >= ? AND q.time < ? AND q.event = 'CONNECT' AND q.queuename IN (?)
-      GROUP BY d, uf`, [prefix, from, to, queues]);
-  for (const r of acc) add(String(r.d).slice(0, 10), 'answered', codeOf(r.uf), Number(r.n) || 0);
+      GROUP BY d, qn, uf`, [prefix, from, to, queues]);
+  for (const r of acc) add(String(r.d).slice(0, 10), lineByQueue.get(r.qn), 'answered', codeOf(r.uf), Number(r.n) || 0);
 
-  // Втрачені в черзі (одне число на добу, як у ручному звіті)
+  // Втрачені в черзі — по кожній лінії
   const [lost] = await this.pool.query(
-    `SELECT DATE(time - INTERVAL ${h} HOUR) AS d, COUNT(*) AS n
+    `SELECT DATE(time - INTERVAL ${h} HOUR) AS d, queuename AS qn, COUNT(*) AS n
        FROM ${this.tQueueLog}
       WHERE time >= ? AND time < ? AND event IN ('ABANDON','EXITWITHTIMEOUT') AND queuename IN (?)
-      GROUP BY d`, [from, to, queues]);
-  for (const r of lost) { const d = days.get(String(r.d).slice(0, 10)); if (d) d.lost += Number(r.n) || 0; }
+      GROUP BY d, qn`, [from, to, queues]);
+  for (const r of lost) { const s = slot(String(r.d).slice(0, 10), lineByQueue.get(r.qn)); if (s) s.lost += Number(r.n) || 0; }
 
   // Прослухали IVR і поклали слухавку: дійшли до контексту лінії, але не до черги; тривожні — окремо
   const [ivr] = await this.pool.query(
-    `SELECT uniqueid, MIN(calldate) AS t, MAX(userfield) AS uf
+    `SELECT uniqueid, MIN(calldate) AS t, MAX(userfield) AS uf, MAX(dcontext) AS ctx
        FROM ${this.tCdr}
       WHERE calldate >= ? AND calldate < ? AND channel LIKE ? AND dcontext IN (?)
         AND lastapp <> 'Queue' AND lastdata NOT LIKE '%no_answer%' AND lastdata NOT LIKE '%alarm%'
@@ -311,19 +316,35 @@ Stats.prototype.dailyStats = async function dailyStats(fromDay, toDay) {
   for (const r of ivr) {
     const ms = Date.parse(String(r.t).slice(0, 19).replace(' ', 'T'));
     if (periods.some(([a, b]) => ms >= a && ms <= b)) continue; // під час тривоги — на вкладці тривог
-    add(dayOfMs(ms), 'ivr', codeOf(r.uf), 1);
+    add(dayOfMs(ms), lineByCtx.get(r.ctx), 'ivr', codeOf(r.uf), 1);
   }
 
-  const out = [...days.values()].map((d) => {
-    const rows = carriers.map((c) => ({ code: c.code, name: c.name, answered: d.answered[c.code] || 0, ivr: d.ivr[c.code] || 0 }))
-      .filter((r) => r.code || r.answered || r.ivr); // «Інші» — лише якщо є
+  const rowsOf = (answered, ivrMap) => carriers
+    .map((c) => ({ code: c.code, name: c.name, answered: answered[c.code] || 0, ivr: ivrMap[c.code] || 0 }));
+  const sum = (rows, f) => rows.reduce((a, r) => a + r[f], 0);
+  const out = [...days].map(([day, perLine]) => {
+    const lines = this.lines.map((l) => {
+      const s = perLine[l.id];
+      const rows = rowsOf(s.answered, s.ivr);
+      return { id: l.id, title: l.title, carriers: rows, answered: sum(rows, 'answered'), ivr: sum(rows, 'ivr'), lost: s.lost };
+    });
+    // разом по трьох лініях
+    const totals = carriers.map((c, i) => ({
+      code: c.code, name: c.name,
+      answered: lines.reduce((a, l) => a + l.carriers[i].answered, 0),
+      ivr: lines.reduce((a, l) => a + l.carriers[i].ivr, 0),
+    }));
+    // «Інші» показуємо лише якщо в цей день такі дзвінки були
+    const keep = totals.map((t) => !!t.code || t.answered > 0 || t.ivr > 0);
+    for (const l of lines) l.carriers = l.carriers.filter((_, i) => keep[i]);
+    const carriersTotal = totals.filter((_, i) => keep[i]);
     return {
-      day: d.day, carriers: rows, lost: d.lost,
-      answered: rows.reduce((a, r) => a + r.answered, 0),
-      ivr: rows.reduce((a, r) => a + r.ivr, 0),
+      day, lines, carriers: carriersTotal,
+      answered: sum(carriersTotal, 'answered'), ivr: sum(carriersTotal, 'ivr'),
+      lost: lines.reduce((a, l) => a + l.lost, 0),
     };
   });
-  return { from: fromDay, to: toDay, dayHour: h, days: out };
+  return { from: fromDay, to: toDay, dayHour: h, lines: this.lines.map((l) => ({ id: l.id, title: l.title })), days: out };
 };
 
 function sqlTime(d) {
