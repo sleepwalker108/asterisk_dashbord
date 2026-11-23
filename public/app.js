@@ -204,6 +204,16 @@
       </div></div></header>`;
   }
 
+  // «з 08:00 23.11 до 08:00 24.11» — межі поточної доби, яку рахує дашборд
+  function dayText() {
+    const d = ui.snap && ui.snap.day;
+    if (!d) return '';
+    const start = new Date(d.replace(' ', 'T'));
+    const end = new Date(start.getTime() + 86400e3);
+    const f = (x) => `${p2(x.getHours())}:${p2(x.getMinutes())} ${p2(x.getDate())}.${p2(x.getMonth() + 1)}`;
+    return `з ${f(start)} до ${f(end)}`;
+  }
+
   // компактна шапка для ТВ: назва, стан зв'язку, великий годинник; без кнопок
   function tvHeader() {
     const s = ui.snap;
@@ -215,7 +225,7 @@
     else if (s && !s.ami) { connTxt = 'Немає зв\'язку з Asterisk'; connC = 'var(--danger)'; }
     return `<header><div class="head tv-head">
       <div class="brand">${logo()}<div class="tv-title">${title}</div></div>
-      <div class="conn tv-conn"><span class="dot" style="background:${connC}"></span><span>${connTxt}</span></div>
+      <div class="conn tv-conn"><span class="dot" style="background:${connC}"></span><span>${connTxt}</span><span style="margin-left:14px">Статистика за добу ${dayText()}</span></div>
       <div class="tv-clock num">${p2(t.getHours())}:${p2(t.getMinutes())}<span class="tv-sec">:${p2(t.getSeconds())}</span></div>
       <button class="btn tv-exit" data-act="tvOff">Вийти з режиму ТВ</button>
     </div></header>`;
@@ -233,7 +243,7 @@
     if (!ui.tv) out += panelToggles(s, line);
     if (ui.showCalls) out += callsPanel(s, line);
     if (ui.showQueues) out += line ? queueView(line, s) : allView(s);
-    if (!ui.tv) out += '<div class="xs" style="color:var(--faint)">Дані оновлюються щосекунди. Статистика «за сьогодні» рахується з бази Asterisk.</div>';
+    if (!ui.tv) out += `<div class="xs" style="color:var(--faint)">Дані оновлюються щосекунди. Статистика рахується за добу ${dayText()} з бази Asterisk.</div>`;
     return out;
   }
 
@@ -314,7 +324,7 @@
       ${tile('Розмовляють', sum((l, c) => c.onCall), 'var(--call)')}
       ${tile('Вільні', sum((l, c) => c.free), 'var(--free)')}
       ${tile('На паузі', sum((l, c) => c.paused), 'var(--paused)')}
-      ${tile('Прийнято сьогодні', sum((l) => l.stats.completed), 'var(--text)')}
+      ${tile('Прийнято за добу', sum((l) => l.stats.completed), 'var(--text)')}
       ${tile('Втрачено в черзі', ab, ab ? 'var(--danger)' : 'var(--text)')}
       ${tile('Кинули в IVR', dr, dr ? 'var(--ivr)' : 'var(--text)')}
     </section><section class="cards" aria-label="Лінії"${ui.tv ? ` style="grid-template-columns:repeat(${s.lines.length},minmax(0,1fr))"` : ''}>`;
@@ -373,7 +383,7 @@
       k('Найдовше очікування', l.waiting.length ? fmt(c.longest) : '—', waitColor(c.longest)),
       k('Вільні оператори', c.free, 'var(--free)'),
       k('Розмовляють', c.onCall, 'var(--call)'),
-      k('Прийнято сьогодні', l.stats.completed, 'var(--text)'),
+      k('Прийнято за добу', l.stats.completed, 'var(--text)'),
       k('Втрачено в черзі', l.stats.abandoned, l.stats.abandoned ? 'var(--danger)' : 'var(--text)'),
       k('Кинули в IVR', l.stats.ivrDrop, l.stats.ivrDrop ? 'var(--ivr)' : 'var(--text)'),
     ];
@@ -430,10 +440,10 @@
       const n = l.stats.alertCalls || 0;
       return `<div class="atile"><div style="font-size:15px;font-weight:700;color:var(--text2)">Лінія ${esc(l.title)}</div>
         <div class="num" style="font-size:46px;font-weight:800;line-height:1.1;color:${n ? 'var(--danger)' : 'var(--text)'}">${n}</div>
-        <div class="num small muted">${open ? 'за поточну тривогу: ' + (open.calls[l.id] || 0) : 'дзвінків за сьогодні'}</div></div>`;
+        <div class="num small muted">${open ? 'за поточну тривогу: ' + (open.calls[l.id] || 0) : 'дзвінків за добу · ' + dayText()}</div></div>`;
     }).join('') + `<div class="atile big"><div style="font-size:15px;font-weight:700;color:var(--text2)">Усього по всіх лініях</div>
       <div class="num" style="font-size:56px;font-weight:800;line-height:1.1;color:${total ? 'var(--danger)' : 'var(--text)'}">${total}</div>
-      <div class="num small muted">${open ? 'за поточну тривогу: ' + (s.alert.nowCalls || 0) : 'дзвінків за сьогодні'}</div></div>`;
+      <div class="num small muted">${open ? 'за поточну тривогу: ' + (s.alert.nowCalls || 0) : 'дзвінків за добу · ' + dayText()}</div></div>`;
     const ids = s.lines.map((l) => l.id);
     const head = `<div class="agrid gh" style="padding:10px 20px"><span>Початок</span><span>Кінець</span><span>Тривалість</span>${s.lines.map((l) => `<span>${esc(l.title)}</span>`).join('')}<span>Усього</span></div>`;
     const rows = log.slice().reverse().map((p) => {
@@ -447,10 +457,10 @@
     const stateTxt = s.alert.on ? `Тривога триває ${since(s.alert.since)}` : 'Зараз тривоги немає · лінії працюють';
     const sc = s.alert.on ? 'var(--danger)' : 'var(--free)';
     return `<div class="qhead"><div><h1>Дзвінки під час тривоги</h1>
-        <div class="muted" style="font-size:14px">Абоненти, які подзвонили, коли лінії були недоступні через повітряну тривогу, і не додзвонились · за сьогодні</div></div>
+        <div class="muted" style="font-size:14px">Абоненти, які подзвонили, коли лінії були недоступні через повітряну тривогу, і не додзвонились · доба ${dayText()}</div></div>
         <div style="font-size:14px;font-weight:700;border-radius:10px;padding:8px 14px;color:${sc};background:${tint(sc, 12)};border:1px solid ${tint(sc, 40)}">${stateTxt}</div></div>
       <section class="atiles" aria-label="Дзвінки під час тривоги по лініях">${tiles}</section>
-      <section class="card" style="overflow:hidden" aria-label="Тривоги сьогодні"><div class="card-h"><h2>Тривоги сьогодні</h2><span class="small muted num">Тривог: ${log.length}</span></div>
+      <section class="card" style="overflow:hidden" aria-label="Тривоги за добу"><div class="card-h"><h2>Тривоги за добу</h2><span class="small muted num">Тривог: ${log.length}</span></div>
         <div style="overflow-x:auto"><div style="min-width:720px">${head}${rows || '<div class="empty">Сьогодні тривог не було</div>'}</div></div></section>`;
   }
 

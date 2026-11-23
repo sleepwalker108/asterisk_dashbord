@@ -3,8 +3,12 @@
 import mysql from 'mysql2/promise';
 
 const p2 = (n) => String(n).padStart(2, '0');
-export function dayStart(d = new Date()) {
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} 00:00:00`;
+// Початок «доби» дашборду. hour = 8 → доба триває з 08:00 до 08:00 наступного дня:
+// о 07:59 це ще вчорашня доба, о 08:00 цифри обнуляються.
+export function dayStart(hour = 0, now = new Date()) {
+  const d = new Date(now);
+  if (d.getHours() < hour) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(hour)}:00:00`;
 }
 export function hm(ms) {
   const d = new Date(ms);
@@ -23,6 +27,9 @@ export class Stats {
     this.store = store;
     this.log = log;
     this.lines = config.lines;
+    // година початку доби; за замовчуванням 8 (доба 08:00–08:00)
+    const h = Number(config.dayStartHour);
+    this.dayHour = Number.isInteger(h) && h >= 0 && h <= 23 ? h : 8;
     this.ok = false;
     this.lastError = null;
     this.data = this._empty();
@@ -47,7 +54,7 @@ export class Stats {
       per[l.id] = { completed: 0, abandoned: 0, timeout: 0, holdSum: 0, holdN: 0, talkSum: 0, talkN: 0,
         ivrDrop: 0, alertCalls: 0, toOther: 0, fromUpov: 0, agents: {}, removed: {} };
     }
-    return { lines: per, day: dayStart(), updated: null };
+    return { lines: per, day: dayStart(this.dayHour), updated: null };
   }
 
   // ---------- тривога ----------
@@ -71,7 +78,7 @@ export class Stats {
   // ---------- статистика за сьогодні ----------
   async refresh() {
     if (!this.enabled) return this.data;
-    const from = dayStart();
+    const from = dayStart(this.dayHour);
     const out = this._empty();
     out.day = from;
     const byQueue = new Map(this.lines.map((l) => [l.queue, l.id]));

@@ -152,6 +152,7 @@ mysql --defaults-file=/etc/mysql/debian.cnf < check-cdr.sql
 |---|---|
 | `config.json` | налаштування і паролі (не в git) |
 | `data/sessions.json` | активні входи (лише хеші) |
+| `dayStartHour` у `config.json` | година, з якої починається «доба» статистики (за замовчуванням 8: 08:00–08:00) |
 | `data/alerts.json` | журнал тривог: початок і кінець |
 | `data/audit.log` | хто з адмінів і коли ставив на паузу, додавав, видаляв |
 

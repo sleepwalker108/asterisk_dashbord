@@ -109,6 +109,7 @@ function buildSnapshot(role) {
     ami: live.connected,
     db: stats.enabled ? stats.ok : null,
     transfer: cfg.transfer || null,
+    day: sd.day, // початок поточної доби, напр. "2026-11-23 08:00:00"
     alert: { on: stats.alert.on, since: stats.alert.since },
     lines,
   };

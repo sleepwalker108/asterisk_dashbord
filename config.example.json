@@ -40,6 +40,7 @@
     "admin":    { "role": "admin",    "password": "ЗГЕНЕРУЙТЕ: npm run hash-password" }
   },
 
+  "dayStartHour": 8,
   "sessionDays": 180,
   "statsRefreshSeconds": 15,
   "alertPollSeconds": 5
