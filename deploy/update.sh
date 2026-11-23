@@ -5,6 +5,8 @@
 set -euo pipefail
 DIR=/opt/queue-dashboard
 cd "$DIR"
+# папка належить queuedash, а запускаємо від root — git має їй довіряти
+git config --global --get-all safe.directory 2>/dev/null | grep -qx "$DIR" || git config --global --add safe.directory "$DIR"
 [ -d .git ] || { echo "У $DIR немає git — див. INSTALL.md, розділ «Перехід на оновлення з GitHub»"; exit 1; }
 [ -f config.json ] || { echo "Немає $DIR/config.json — це не сервер дашборду?"; exit 1; }
 

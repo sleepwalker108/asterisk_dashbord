@@ -96,6 +96,7 @@ bash /opt/queue-dashboard/deploy/update.sh
 
 ```bash
 apt install -y git
+git config --global --add safe.directory /opt/queue-dashboard
 cd /opt/queue-dashboard
 git init -q && git remote add origin https://github.com/sleepwalker108/asterisk_dashbord.git
 git fetch -q origin && git reset --hard origin/main && git branch -M main && git branch -u origin/main
