@@ -33,16 +33,28 @@ export class Store {
 
   alertStarted(t) {
     if (this.openAlert()) return;
-    this.alerts.push({ start: t, end: null });
+    this.alerts.push({ start: t, end: null, seen: t });
     const cutoff = Date.now() - 400 * 86400e3; // тримаємо ~рік історії
     this.alerts = this.alerts.filter((a) => (a.end || Date.now()) >= cutoff);
     this._write(this.alertsFile, this.alerts);
   }
 
+  // дашборд бачить, що тривога ще триває; на диск пишемо не частіше разу на хвилину
+  alertSeen(t) {
+    const open = this.openAlert();
+    if (!open) return;
+    const prev = open.seen || open.start;
+    open.seen = t;
+    if (t - prev >= 60e3) this._write(this.alertsFile, this.alerts);
+  }
+
   alertEnded(t) {
     const open = this.openAlert();
     if (!open) return;
-    open.end = t;
+    // якщо дашборд довго не працював, кінець тривоги невідомий —
+    // ставимо останній момент, коли її ще бачили, а не «зараз»
+    const seen = open.seen || open.start;
+    open.end = t - seen > 5 * 60e3 ? seen : t;
     this._write(this.alertsFile, this.alerts);
   }
 

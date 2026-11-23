@@ -59,7 +59,7 @@ export class Stats {
     const t = Date.now();
     const open = this.store.openAlert(); // незакрита тривога з журналу (переживає перезапуск)
     if (on) {
-      if (!open) { this.store.alertStarted(t); this.log.info('[alert] тривога ввімкнена'); }
+      if (!open) { this.store.alertStarted(t); this.log.info('[alert] тривога ввімкнена'); } else this.store.alertSeen(t);
       this.alert = { on: true, since: open ? open.start : t };
     } else {
       if (open) { this.store.alertEnded(t); this.log.info('[alert] тривогу знято'); }
