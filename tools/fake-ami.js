@@ -4,6 +4,9 @@
 import net from 'node:net';
 
 const PORT = Number(process.argv[2] || 15038);
+// --no-agent-events: як Asterisk 11 без eventwhencalled=yes — немає AgentCalled/AgentConnect/AgentComplete,
+// лише Dial і Bridge
+const NO_AGENT = process.argv.includes('--no-agent-events');
 const LINES = [
   { queue: 'NIB', context: 'NIB', exten: '1648', members: ['SIP/508', 'SIP/510', 'SIP/511', 'SIP/525', 'SIP/526', 'SIP/529'] },
   { queue: 'minre', context: 'MINREINT', exten: '1548', members: ['SIP/203', 'SIP/209', 'SIP/210', 'SIP/215', 'SIP/229'] },
@@ -20,7 +23,10 @@ let chanSeq = 0x400;
 let alert = false;
 
 const fmt = (obj) => Object.entries(obj).map(([k, v]) => `${k}: ${v}`).join('\r\n') + '\r\n\r\n';
-const broadcast = (ev) => { for (const c of clients) if (c.authed) c.write(fmt(ev)); };
+const broadcast = (ev) => {
+  if (NO_AGENT && /^Agent(Called|Connect|Complete|RingNoAnswer)$/.test(ev.Event)) return;
+  for (const c of clients) if (c.authed) c.write(fmt(ev));
+};
 const memberEv = (event, queue, iface) => {
   const m = members.get(`${queue}|${iface}`);
   return { Event: event, Privilege: 'agent,all', Queue: queue, Location: iface, MemberName: iface, StateInterface: iface,
@@ -147,17 +153,24 @@ function tryAnswer(line, chan, uid, num, tries) {
     return;
   }
   const iface = free[rnd(0, free.length - 1)];
+  const agentChan = `${iface}-${(++chanSeq).toString(16).padStart(8, '0')}`;
+  const agentUid = `${++uidSeq}.${rnd(100, 999)}`;
   broadcast({ Event: 'AgentCalled', Queue: line.queue, AgentCalled: iface, AgentName: iface, ChannelCalling: chan, CallerIDNum: num, Uniqueid: uid });
+  broadcast({ Event: 'Dial', SubEvent: 'Begin', Channel: chan, Destination: agentChan, CallerIDNum: num, UniqueID: uid, DestUniqueID: agentUid, Dialstring: iface.replace('SIP/', '') });
   setStatus(line.queue, iface, 6);
   setTimeout(() => {
     broadcast({ Event: 'Leave', Channel: chan, Queue: line.queue, Count: 0, Uniqueid: uid });
-    broadcast({ Event: 'AgentConnect', Queue: line.queue, Uniqueid: uid, Channel: iface + '-0001', Member: iface, MemberName: iface, HoldTime: tries * 3, RingTime: 3 });
+    broadcast({ Event: 'AgentConnect', Queue: line.queue, Uniqueid: uid, Channel: agentChan, Member: iface, MemberName: iface, HoldTime: tries * 3, RingTime: 3 });
+    broadcast({ Event: 'Dial', SubEvent: 'End', Channel: chan, UniqueID: uid, DialStatus: 'ANSWER' });
+    broadcast({ Event: 'Bridge', Bridgestate: 'Link', Bridgetype: 'core', Channel1: chan, Channel2: agentChan, Uniqueid1: uid, Uniqueid2: agentUid, CallerID1: num, CallerID2: iface.replace('SIP/', '') });
     setStatus(line.queue, iface, 2);
     setTimeout(() => {
       const m = members.get(`${line.queue}|${iface}`);
       if (m) m.calls += 1;
-      broadcast({ Event: 'AgentComplete', Queue: line.queue, Uniqueid: uid, Channel: iface + '-0001', Member: iface, MemberName: iface, HoldTime: tries * 3, TalkTime: 30, Reason: 'caller' });
+      broadcast({ Event: 'AgentComplete', Queue: line.queue, Uniqueid: uid, Channel: agentChan, Member: iface, MemberName: iface, HoldTime: tries * 3, TalkTime: 30, Reason: 'caller' });
+      broadcast({ Event: 'Bridge', Bridgestate: 'Unlink', Bridgetype: 'core', Channel1: chan, Channel2: agentChan, Uniqueid1: uid, Uniqueid2: agentUid, CallerID1: num, CallerID2: iface.replace('SIP/', '') });
       broadcast({ Event: 'Hangup', Channel: chan, Uniqueid: uid, Cause: 16 });
+      broadcast({ Event: 'Hangup', Channel: agentChan, Uniqueid: agentUid, Cause: 16 });
       setStatus(line.queue, iface, 1);
     }, rnd(15, 60) * 1000);
   }, 3000);

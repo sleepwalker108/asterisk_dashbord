@@ -228,6 +228,70 @@ export class LiveState {
     m.caller = ''; m.callerUid = null; m.callerFrom = false;
   }
 
+  // ---------- розмови з подій Dial / Bridge ----------
+  // AgentCalled/AgentConnect в Asterisk 11 приходять лише з eventwhencalled=yes у queues.conf.
+  // Dial і Bridge приходять завжди, тож з них теж визначаємо, хто кому дзвонить і з ким розмовляє.
+  _isTrunk(chan) {
+    const p = this.cfg.trunkChannelPrefix;
+    return !!chan && !!p && chan.startsWith(p);
+  }
+
+  // 'SIP/203-0000047e' → 'SIP/203'
+  static ifaceOf(chan) {
+    return String(chan || '').replace(/-[0-9a-f]+$/i, '');
+  }
+
+  // усі члени черг з цим інтерфейсом (оператор може бути в кількох чергах)
+  _membersByIface(iface) {
+    const out = [];
+    for (const [queue, q] of this.queues) {
+      const m = q.members.get(iface);
+      if (m) out.push([queue, m]);
+    }
+    return out;
+  }
+
+  _setCaller(iface, uid, fallbackNum, status) {
+    const c = this.channels.get(uid);
+    const num = c?.num || fallbackNum || '';
+    for (const [queue, m] of this._membersByIface(iface)) {
+      if (m.callerUid !== uid) { m.caller = num; m.callerUid = uid; }
+      else if (num) m.caller = num;
+      m.callerFrom = this._isTransfer(queue, c?.name || '');
+      if (status && m.status !== status && m.status !== 'unavail') { m.status = status; m.since = now(); }
+    }
+  }
+
+  _clearCaller(uid) {
+    for (const q of this.queues.values()) {
+      for (const m of q.members.values()) {
+        if (m.callerUid === uid) { m.caller = ''; m.callerUid = null; m.callerFrom = false; }
+      }
+    }
+  }
+
+  onDial(ev) {
+    const sub = ev.SubEvent || 'Begin';
+    if (sub === 'Begin') {
+      if (!this._isTrunk(ev.Channel)) return; // цікавлять лише дзвінки від абонентів з транку
+      this._setCaller(LiveState.ifaceOf(ev.Destination), ev.UniqueID || ev.Uniqueid, ev.CallerIDNum, 'ring');
+    } else if (sub === 'End') {
+      // оператор не взяв слухавку — прибираємо «дзвонить»; якщо взяв, далі прийде Bridge
+      if (String(ev.DialStatus || '').toUpperCase() !== 'ANSWER') this._clearCaller(ev.UniqueID || ev.Uniqueid);
+    }
+  }
+
+  onBridge(ev) {
+    const [c1, c2] = [ev.Channel1, ev.Channel2];
+    const [u1, u2] = [ev.Uniqueid1, ev.Uniqueid2];
+    let callerUid = null, agentChan = null, num = '';
+    if (this._isTrunk(c1)) { callerUid = u1; agentChan = c2; num = ev.CallerID1; }
+    else if (this._isTrunk(c2)) { callerUid = u2; agentChan = c1; num = ev.CallerID2; }
+    if (!callerUid) return;
+    if (ev.Bridgestate === 'Link') this._setCaller(LiveState.ifaceOf(agentChan), callerUid, num, 'call');
+    else if (ev.Bridgestate === 'Unlink') this._clearCaller(callerUid);
+  }
+
   onQueueMemberStatus(ev) {
     const q = this.queues.get(ev.Queue);
     if (!q) return;
