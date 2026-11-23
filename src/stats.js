@@ -177,4 +177,72 @@ export class Stats {
       this.log.warn(`[db] статистика: ${err.message}`);
     }
   }
+
+  // ---------- історія тривожних дзвінків по днях ----------
+  // fromDay/toDay — 'YYYY-MM-DD' (включно). «День» = доба з dayHour до dayHour наступного дня.
+  // Тривожний дзвінок = «нога» абонента в контексті лінії, де грав *alarm*-запис,
+  // або (для тривог, які записав дашборд) будь-який дзвінок, що не дійшов до черги під час тривоги.
+  async alertHistory(fromDay, toDay) {
+    const h = this.dayHour;
+    const start = new Date(`${fromDay}T${p2(h)}:00:00`);
+    const end = new Date(`${toDay}T${p2(h)}:00:00`);
+    end.setDate(end.getDate() + 1);
+    const ids = this.lines.map((l) => l.id);
+    const byCtx = new Map(this.lines.map((l) => [l.context, l.id]));
+    const ctxs = [...byCtx.keys()];
+    const prefix = (this.cfg.trunkChannelPrefix || '') + '%';
+    const zero = () => Object.fromEntries(ids.map((id) => [id, 0]));
+
+    // заготовка: усі дні діапазону з нулями
+    const days = new Map();
+    for (const d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+      days.set(`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, zero());
+    }
+
+    const [rows] = await this.pool.query(
+      `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, COUNT(*) AS c
+         FROM ${this.tCdr}
+        WHERE calldate >= ? AND calldate < ? AND channel LIKE ? AND dcontext IN (?) AND lastdata LIKE '%alarm%'
+        GROUP BY d, dcontext`, [sqlTime(start), sqlTime(end), prefix, ctxs]);
+    for (const r of rows) {
+      const day = days.get(String(r.d).slice(0, 10));
+      const id = byCtx.get(r.dcontext);
+      if (day && id) day[id] += Number(r.c) || 0;
+    }
+
+    // тривоги, які записав сам дашборд: рахуємо і тих, хто поклав слухавку ще до тривожного запису
+    const periods = [];
+    for (const p of this.store.alerts) {
+      const pEnd = p.end || Date.now();
+      if (pEnd < start.getTime() || p.start >= end.getTime()) continue;
+      const calls = zero();
+      const [pr] = await this.pool.query(
+        `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, COUNT(*) AS c,
+                SUM(lastdata LIKE '%alarm%') AS alarm
+           FROM ${this.tCdr}
+          WHERE calldate >= ? AND calldate <= ? AND channel LIKE ? AND dcontext IN (?)
+            AND lastapp <> 'Queue' AND lastdata NOT LIKE '%no_answer%'
+          GROUP BY d, dcontext`, [sqlTime(new Date(p.start)), sqlTime(new Date(pEnd)), prefix, ctxs]);
+      for (const r of pr) {
+        const id = byCtx.get(r.dcontext);
+        if (!id) continue;
+        const all = Number(r.c) || 0;
+        calls[id] += all;
+        const day = days.get(String(r.d).slice(0, 10));
+        if (day) day[id] += all - (Number(r.alarm) || 0); // «alarm»-дзвінки вже пораховані вище
+      }
+      periods.push({ start: p.start, end: p.end || null, calls });
+    }
+
+    return {
+      from: fromDay, to: toDay, dayHour: h,
+      lines: this.lines.map((l) => ({ id: l.id, title: l.title })),
+      days: [...days].map(([day, calls]) => ({ day, calls, total: ids.reduce((a, id) => a + calls[id], 0) })),
+      periods,
+    };
+  }
+}
+
+function sqlTime(d) {
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }

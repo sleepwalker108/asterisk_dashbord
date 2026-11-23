@@ -142,6 +142,13 @@
     if (!ui.user) { if (!document.getElementById('loginName')) $app.innerHTML = loginView(); return; }
     // поки кнопка натиснута, не перемальовуємо — інакше клік «загубиться»
     if (ui.pointerDown) { ui.pendingRender = true; return; }
+    // поки вибирають дату, не перемальовуємо — інакше календар закриється
+    const ae = document.activeElement;
+    if (ae && ae.type === 'date') {
+      ui.pendingRender = true;
+      if (!ae.dataset.qdBound) { ae.dataset.qdBound = '1'; ae.addEventListener('blur', () => { if (ui.pendingRender) { ui.pendingRender = false; setTimeout(render, 0); } }); }
+      return;
+    }
     // зберігаємо фокус у полі вводу між перемальовуваннями
     const a = document.activeElement;
     const focusId = a && a.id ? a.id : null;
@@ -461,7 +468,84 @@
         <div style="font-size:14px;font-weight:700;border-radius:10px;padding:8px 14px;color:${sc};background:${tint(sc, 12)};border:1px solid ${tint(sc, 40)}">${stateTxt}</div></div>
       <section class="atiles" aria-label="Дзвінки під час тривоги по лініях">${tiles}</section>
       <section class="card" style="overflow:hidden" aria-label="Тривоги за добу"><div class="card-h"><h2>Тривоги за добу</h2><span class="small muted num">Тривог: ${log.length}</span></div>
-        <div style="overflow-x:auto"><div style="min-width:720px">${head}${rows || '<div class="empty">Сьогодні тривог не було</div>'}</div></div></section>`;
+        <div style="overflow-x:auto"><div style="min-width:720px">${head}${rows || '<div class="empty">За цю добу тривог не було</div>'}</div></div></section>
+      ${historyBlock(s)}`;
+  }
+
+  // ---------- історія тривожних дзвінків по днях ----------
+  const isoDay = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  function shiftToday() { // поточна «доба» з урахуванням 08:00
+    const d = ui.snap && ui.snap.day ? new Date(ui.snap.day.replace(' ', 'T')) : new Date(now());
+    return d;
+  }
+  function histRange(kind) {
+    const to = shiftToday();
+    const from = new Date(to);
+    if (kind === '7') from.setDate(from.getDate() - 6);
+    else if (kind === '30') from.setDate(from.getDate() - 29);
+    else if (kind === 'month') from.setDate(1);
+    return [isoDay(from), isoDay(to)];
+  }
+  async function loadHistory() {
+    if (!ui.histFrom) [ui.histFrom, ui.histTo] = histRange('7');
+    ui.histBusy = true; ui.histErr = ''; render();
+    try {
+      ui.hist = await api(`/api/alerts/history?from=${ui.histFrom}&to=${ui.histTo}`);
+    } catch (err) {
+      ui.histErr = err.message; ui.hist = null;
+    } finally {
+      ui.histBusy = false; render();
+    }
+  }
+  async function downloadXlsx(href) {
+    ui.xlsxBusy = true; render();
+    try {
+      const r = await fetch(href, { credentials: 'same-origin' });
+      if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch { /* */ } throw new Error(m); }
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Тривоги_${ui.histFrom}_${ui.histTo}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } catch (err) {
+      toast('Не вдалося сформувати файл: ' + err.message);
+    } finally {
+      ui.xlsxBusy = false; render();
+    }
+  }
+
+  function historyBlock(s) {
+    if (!ui.hist && !ui.histBusy && !ui.histErr) { setTimeout(loadHistory, 0); ui.histBusy = true; }
+    const h = ui.hist;
+    const dmy = (x) => `${x.slice(8, 10)}.${x.slice(5, 7)}.${x.slice(0, 4)}`;
+    const quick = (k, label) => `<button class="btn" data-act="histQuick" data-id="${k}">${label}</button>`;
+    let table = '';
+    if (ui.histErr) table = `<div class="empty" style="color:var(--danger)">${esc(ui.histErr)}</div>`;
+    else if (!h) table = '<div class="empty">Завантаження…</div>';
+    else {
+      const ids = h.lines.map((l) => l.id);
+      const cols = `1.2fr ${ids.map(() => '1fr').join(' ')} 1fr`;
+      const sum = Object.fromEntries(ids.map((id) => [id, 0]));
+      const days = h.days.slice().reverse();
+      for (const d of days) for (const id of ids) sum[id] += d.calls[id];
+      const total = ids.reduce((a, id) => a + sum[id], 0);
+      table = `<div class="gh" style="grid-template-columns:${cols}"><span>Дата (доба з ${p2(h.dayHour)}:00)</span>${h.lines.map((l) => `<span>${esc(l.title)}</span>`).join('')}<span>Усього</span></div>
+        <div class="gr num" style="grid-template-columns:${cols};font-weight:800;background:var(--head)"><span>Разом за період</span>${ids.map((id) => `<span>${sum[id]}</span>`).join('')}<span style="color:${total ? 'var(--danger)' : 'var(--text)'}">${total}</span></div>
+        ${days.map((d) => `<div class="gr num" style="grid-template-columns:${cols}"><span style="font-weight:600">${dmy(d.day)}</span>${ids.map((id) => `<span class="${d.calls[id] ? '' : 'muted'}">${d.calls[id]}</span>`).join('')}<span style="font-weight:800;color:${d.total ? 'var(--danger)' : 'var(--muted)'}">${d.total}</span></div>`).join('')}`;
+    }
+    const xlsxHref = `/api/alerts/export.xlsx?from=${esc(ui.histFrom || '')}&to=${esc(ui.histTo || '')}`;
+    return `<section class="card" style="overflow:hidden" aria-label="Історія по днях">
+      <div class="card-h" style="flex-wrap:wrap"><div><h2>Історія по днях</h2>
+        <div class="xs muted">Дзвінки під час тривоги за кожну добу. Нічого не обнуляється, дані беруться з історії дзвінків Asterisk.</div></div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          ${quick('7', '7 днів')}${quick('30', '30 днів')}${quick('month', 'Цей місяць')}
+          <label class="small muted" for="histFrom">з</label><input id="histFrom" class="inp" type="date" value="${esc(ui.histFrom || '')}" style="min-height:36px;padding:4px 8px">
+          <label class="small muted" for="histTo">по</label><input id="histTo" class="inp" type="date" value="${esc(ui.histTo || '')}" style="min-height:36px;padding:4px 8px">
+          <button class="btn" data-act="histLoad" ${ui.histBusy ? 'disabled' : ''}>Показати</button>
+          <button class="btn btn-primary" data-act="histXlsx" data-href="${xlsxHref}" ${ui.xlsxBusy ? 'disabled' : ''}>⬇ Завантажити в Excel</button>
+        </div></div>
+      <div style="overflow-x:auto"><div style="min-width:640px">${table}</div></div></section>`;
   }
 
   // ---------- дії ----------
@@ -505,6 +589,13 @@
         api('/api/logout', {}).catch(() => {}).finally(() => { ui.user = null; ui.role = null; ui.snap = null; if (ws) ws.close(); $app.innerHTML = ''; render(); });
         break;
       case 'view': ui.view = d.id; render(); break;
+      case 'histXlsx': downloadXlsx(d.href); break;
+      case 'histQuick': [ui.histFrom, ui.histTo] = histRange(d.id); loadHistory(); break;
+      case 'histLoad': {
+        const f = document.getElementById('histFrom').value, t = document.getElementById('histTo').value;
+        if (!f || !t || f > t) { toast('Вкажіть дати: «з» не пізніше за «по»'); break; }
+        ui.histFrom = f; ui.histTo = t; loadHistory(); break;
+      }
       case 'tvOn': location.href = tvUrl(true); break;
       case 'tvOff': location.href = tvUrl(false); break;
       case 'theme': ui.theme = d.id; save('qd-theme', d.id); render(); break;
@@ -532,7 +623,11 @@
   document.addEventListener('pointerup', release);
   document.addEventListener('pointercancel', release);
 
-  document.addEventListener('input', (e) => { if (e.target.id === 'addExt') ui.addExt = e.target.value; });
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'addExt') ui.addExt = e.target.value;
+    if (e.target.id === 'histFrom' && e.target.value) ui.histFrom = e.target.value;
+    if (e.target.id === 'histTo' && e.target.value) ui.histTo = e.target.value;
+  });
   document.addEventListener('keydown', (e) => {
     if (ui.tv && e.key === 'Escape') { location.href = tvUrl(false); return; }
     if (e.key !== 'Enter') return;

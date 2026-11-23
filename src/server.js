@@ -9,6 +9,7 @@ import { LiveState } from './state.js';
 import { Stats, hm } from './stats.js';
 import { Store } from './store.js';
 import { verifyPassword, fingerprint, LoginLimiter } from './auth.js';
+import { buildXlsx } from './xlsx.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const log = {
@@ -122,6 +123,37 @@ function buildSnapshot(role) {
     snap.alert.nowCalls = open ? Object.values(open.calls).reduce((a, b) => a + b, 0) : 0;
   }
   return snap;
+}
+
+// ---------- Excel: історія тривог ----------
+function alertsWorkbook(hist) {
+  const two = (n) => String(n).padStart(2, '0');
+  const dmy = (s) => `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
+  const dt = (ms) => { const d = new Date(ms); return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+  const dur = (sec) => `${Math.floor(sec / 3600)}:${two(Math.floor(sec % 3600 / 60))}:${two(Math.floor(sec % 60))}`;
+  const titles = hist.lines.map((l) => l.title);
+  const ids = hist.lines.map((l) => l.id);
+
+  const byDay = [[`Дата (доба з ${two(hist.dayHour)}:00)`, ...titles, 'Усього']];
+  const sum = Object.fromEntries(ids.map((id) => [id, 0]));
+  for (const d of hist.days) {
+    byDay.push([dmy(d.day), ...ids.map((id) => d.calls[id]), d.total]);
+    for (const id of ids) sum[id] += d.calls[id];
+  }
+  byDay.push([{ v: 'Разом', bold: true }, ...ids.map((id) => ({ v: sum[id], bold: true })), { v: ids.reduce((a, id) => a + sum[id], 0), bold: true }]);
+
+  const alerts = [['№', 'Початок', 'Кінець', 'Тривалість', 'Тривалість, хв', ...titles, 'Усього дзвінків']];
+  hist.periods.forEach((p, i) => {
+    const sec = ((p.end || Date.now()) - p.start) / 1000;
+    alerts.push([i + 1, dt(p.start), p.end ? dt(p.end) : 'триває', dur(sec), Math.round(sec / 60),
+      ...ids.map((id) => p.calls[id]), ids.reduce((a, id) => a + p.calls[id], 0)]);
+  });
+  if (!hist.periods.length) alerts.push(['', 'За цей період дашборд не записав жодної тривоги']);
+
+  return buildXlsx([
+    { name: 'По днях', rows: byDay, widths: [22, ...titles.map(() => 16), 12] },
+    { name: 'Тривоги', rows: alerts, widths: [5, 18, 18, 12, 15, ...titles.map(() => 16), 16] },
+  ]);
 }
 
 // ---------- HTTP ----------
@@ -277,6 +309,30 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           return send(res, 400, { error: err.message });
         }
+      }
+      if (req.method === 'GET' && (p === '/api/alerts/history' || p === '/api/alerts/export.xlsx')) {
+        if (sess.role !== 'admin') return send(res, 403, { error: 'Лише для адміністратора' });
+        if (!stats.enabled) return send(res, 503, { error: 'База даних вимкнена в конфігу' });
+        const from = url.searchParams.get('from') || '';
+        const to = url.searchParams.get('to') || '';
+        const re = /^\d{4}-\d{2}-\d{2}$/;
+        const span = (Date.parse(to) - Date.parse(from)) / 86400e3;
+        if (!re.test(from) || !re.test(to) || !(span >= 0) || span > 400) {
+          return send(res, 400, { error: 'Невірний період (максимум 400 днів)' });
+        }
+        let hist;
+        try {
+          hist = await stats.alertHistory(from, to);
+        } catch (err) {
+          log.warn(`[db] історія тривог: ${err.message}`);
+          return send(res, 502, { error: 'Не вдалося прочитати базу' });
+        }
+        if (p === '/api/alerts/history') {
+          return send(res, 200, { ...hist, logSince: store.alerts.length ? store.alerts[0].start : null });
+        }
+        return send(res, 200, alertsWorkbook(hist), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
+          'Content-Disposition': `attachment; filename="alerts_${from}_${to}.xlsx"; filename*=UTF-8''${encodeURIComponent(`Тривоги_${from}_${to}.xlsx`)}`,
+        });
       }
       if (req.method === 'GET' && p === '/api/audit') {
         if (sess.role !== 'admin') return send(res, 403, { error: 'Лише для адміністратора' });
