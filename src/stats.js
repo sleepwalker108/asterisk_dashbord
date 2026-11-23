@@ -84,10 +84,17 @@ export class Stats {
     const byQueue = new Map(this.lines.map((l) => [l.queue, l.id]));
     const byCtx = new Map(this.lines.map((l) => [l.context, l.id]));
 
-    // queue_log: time — varchar з індексом, тому порівнюємо рядком без функцій
+    // queue_log: time — varchar з індексом, тому порівнюємо рядком без функцій.
+    // Час очікування/розмови беремо лише якщо в полі справді ціле число секунд (менше доби):
+    // інакше один «битий» запис (напр. з ідентифікатором дзвінка) псує середнє.
+    const okNum = (col) => `(${col} REGEXP '^[0-9]{1,5}$' AND CAST(${col} AS UNSIGNED) < 86400)`;
     const [ql] = await this.pool.query(
       `SELECT queuename, agent, event, COUNT(*) AS c,
-              SUM(CAST(data1 AS UNSIGNED)) AS s1, SUM(CAST(data2 AS UNSIGNED)) AS s2, MAX(time) AS last
+              SUM(CASE WHEN ${okNum('data1')} THEN CAST(data1 AS UNSIGNED) ELSE 0 END) AS s1,
+              SUM(${okNum('data1')}) AS n1,
+              SUM(CASE WHEN ${okNum('data2')} THEN CAST(data2 AS UNSIGNED) ELSE 0 END) AS s2,
+              SUM(${okNum('data2')}) AS n2,
+              MAX(time) AS last
          FROM ${this.tQueueLog}
         WHERE time >= ? AND event IN ('CONNECT','ABANDON','EXITWITHTIMEOUT','COMPLETEAGENT','COMPLETECALLER')
         GROUP BY queuename, agent, event`, [from]);
@@ -97,14 +104,14 @@ export class Stats {
       const s = out.lines[id];
       const c = Number(r.c) || 0;
       if (r.event === 'CONNECT') {
-        s.completed += c; s.holdSum += Number(r.s1) || 0; s.holdN += c;
+        s.completed += c; s.holdSum += Number(r.s1) || 0; s.holdN += Number(r.n1) || 0;
         if (r.agent && r.agent !== 'NONE') {
           const a = (s.agents[r.agent] ||= { calls: 0, last: null });
           a.calls += c; a.last = r.last;
         }
       } else if (r.event === 'ABANDON') s.abandoned += c;
       else if (r.event === 'EXITWITHTIMEOUT') s.timeout += c;
-      else { s.talkSum += Number(r.s2) || 0; s.talkN += c; }
+      else { s.talkSum += Number(r.s2) || 0; s.talkN += Number(r.n2) || 0; }
     }
 
     // хто прибраний з черги сьогодні (для блоку «Не в черзі»)
