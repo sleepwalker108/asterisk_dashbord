@@ -1,0 +1,27 @@
+[Unit]
+Description=Queue dashboard (заміна MonAst)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=queuedash
+Group=queuedash
+WorkingDirectory=/opt/queue-dashboard
+Environment=NODE_ENV=production
+Environment=CONFIG=/opt/queue-dashboard/config.json
+Environment=DATA_DIR=/opt/queue-dashboard/data
+ExecStart=/usr/bin/node /opt/queue-dashboard/src/server.js
+Restart=always
+RestartSec=3
+
+# обмеження, щоб сервіс нічого зайвого не міг
+MemoryMax=512M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/queue-dashboard/data
+
+[Install]
+WantedBy=multi-user.target

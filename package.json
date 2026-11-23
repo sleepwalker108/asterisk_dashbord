@@ -1,0 +1,20 @@
+{
+  "name": "queue-dashboard",
+  "version": "0.2.0",
+  "description": "Дашборд черг Asterisk (заміна MonAst)",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "fake-ami": "node tools/fake-ami.js",
+    "hash-password": "node tools/hash-password.js"
+  },
+  "dependencies": {
+    "mysql2": "3.24.6",
+    "ws": "8.23.0"
+  }
+}

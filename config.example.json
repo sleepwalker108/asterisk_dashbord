@@ -1,0 +1,46 @@
+{
+  "listen": { "host": "0.0.0.0", "port": 8080 },
+
+  "ami": {
+    "host": "IP_СЕРВЕРА_ASTERISK",
+    "port": 5038,
+    "username": "dashboard",
+    "secret": "ЗАМІНІТЬ_НА_ПАРОЛЬ_AMI"
+  },
+
+  "db": {
+    "enabled": true,
+    "host": "IP_СЕРВЕРА_ASTERISK",
+    "port": 3306,
+    "user": "dashboard_ro",
+    "password": "ЗАМІНІТЬ_НА_ПАРОЛЬ_MYSQL",
+    "queueLogTable": "queue_log.queue_log",
+    "cdrTable": "cdr.cdr",
+    "alertsTable": "monitoring.alerts",
+    "alertsRowName": "ivr",
+    "alertOnStatus": "A"
+  },
+
+  "trunkChannelPrefix": "SIP/transit1-",
+
+  "lines": [
+    { "id": "NIB",   "title": "1648",          "queue": "NIB",            "context": "NIB" },
+    { "id": "minre", "title": "1548",          "queue": "minre",          "context": "MINREINT" },
+    { "id": "upov",  "title": "Уповноважений", "queue": "upovnovazhenyy", "context": "UPOVNOVAZHENYY" }
+  ],
+
+  "transfer": {
+    "fromLine": "upov",
+    "toLine": "minre",
+    "callerIdName": "Upovnovazhenyy"
+  },
+
+  "users": {
+    "operator": { "role": "operator", "password": "ЗГЕНЕРУЙТЕ: npm run hash-password" },
+    "admin":    { "role": "admin",    "password": "ЗГЕНЕРУЙТЕ: npm run hash-password" }
+  },
+
+  "sessionDays": 180,
+  "statsRefreshSeconds": 15,
+  "alertPollSeconds": 5
+}
