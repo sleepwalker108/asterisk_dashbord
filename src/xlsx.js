@@ -13,25 +13,62 @@ function colName(i) {
   return s;
 }
 
+// Стиль клітинки = комбінація ознак: bold(1) + border(2) + center(4) + italic(8) → індекс у cellXfs
+const styleIndex = (o) => (o.bold ? 1 : 0) + (o.border ? 2 : 0) + (o.center ? 4 : 0) + (o.italic ? 8 : 0);
+
 function sheetXml(sheet) {
+  const headerBold = sheet.headerBold !== false;
   const rows = sheet.rows.map((row, r) => {
     const cells = row.map((cell, c) => {
-      if (cell === null || cell === undefined || cell === '') return '';
-      const obj = typeof cell === 'object' ? cell : { v: cell };
-      const bold = obj.bold || r === 0;
+      const obj = cell !== null && typeof cell === 'object' ? { ...cell } : { v: cell };
+      if (r === 0 && headerBold) obj.bold = true;
+      const empty = obj.v === null || obj.v === undefined || obj.v === '';
+      const s = styleIndex(obj);
+      if (empty && !s) return '';
       const ref = colName(c) + (r + 1);
-      const s = bold ? ' s="1"' : '';
-      if (typeof obj.v === 'number' && Number.isFinite(obj.v)) return `<c r="${ref}"${s}><v>${obj.v}</v></c>`;
-      return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(obj.v)}</t></is></c>`;
+      const sa = s ? ` s="${s}"` : '';
+      if (empty) return `<c r="${ref}"${sa}/>`;
+      if (typeof obj.v === 'number' && Number.isFinite(obj.v)) return `<c r="${ref}"${sa}><v>${obj.v}</v></c>`;
+      return `<c r="${ref}"${sa} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(obj.v)}</t></is></c>`;
     }).join('');
-    return `<row r="${r + 1}">${cells}</row>`;
+    const ht = sheet.rowHeights && sheet.rowHeights[r] ? ` ht="${sheet.rowHeights[r]}" customHeight="1"` : '';
+    return `<row r="${r + 1}"${ht}>${cells}</row>`;
   }).join('');
   const cols = (sheet.widths || []).map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+  const merges = (sheet.merges || []).map((m) => `<mergeCell ref="${m}"/>`).join('');
+  const pane = sheet.freeze === false ? '' : '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>';
   return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+    + `<sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews>`
     + (cols ? `<cols>${cols}</cols>` : '')
-    + `<sheetData>${rows}</sheetData></worksheet>`;
+    + `<sheetData>${rows}</sheetData>`
+    + (merges ? `<mergeCells count="${sheet.merges.length}">${merges}</mergeCells>` : '')
+    + '</worksheet>';
+}
+
+// адреса клітинки для об'єднань: cellRef(0, 2) → "C1"
+export const cellRef = (row, col) => colName(col) + (row + 1);
+
+function stylesXml() {
+  const xfs = [];
+  for (let i = 0; i < 16; i++) {
+    const bold = i & 1, border = i & 2, center = i & 4, italic = i & 8;
+    const font = (bold ? 1 : 0) + (italic ? 2 : 0);
+    const align = center ? '<alignment horizontal="center" vertical="center" wrapText="1"/>' : '<alignment vertical="center"/>';
+    xfs.push(`<xf numFmtId="0" fontId="${font}" fillId="0" borderId="${border ? 1 : 0}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${align}</xf>`);
+  }
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    + '<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font>'
+    + '<font><i/><sz val="11"/><name val="Calibri"/></font><font><b/><i/><sz val="11"/><name val="Calibri"/></font></fonts>'
+    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+    + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+    + '<border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right>'
+    + '<top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>'
+    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+    + `<cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs>`
+    + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+    + '</styleSheet>';
 }
 
 export function buildXlsx(sheets) {
@@ -57,16 +94,7 @@ export function buildXlsx(sheets) {
     + sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
     + `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`
     + '</Relationships>']);
-  files.push(['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
-    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
-    + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-    + '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
-    + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
-    + '</styleSheet>']);
+  files.push(['xl/styles.xml', stylesXml()]);
   sheets.forEach((s, i) => files.push([`xl/worksheets/sheet${i + 1}.xml`, sheetXml(s)]));
   return zip(files);
 }

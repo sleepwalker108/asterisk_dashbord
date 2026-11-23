@@ -185,6 +185,7 @@
     if (isAdmin()) {
       const total = lines.reduce((a, l) => a + (l.stats.alertCalls || 0), 0);
       tabs.push({ id: 'alert', label: s && s.alert.on ? '⚠ Тривога' : 'Під час тривоги', n: total, red: true });
+      tabs.push({ id: 'stats', label: '📊 Статистика', n: null });
     }
     const t = new Date(now());
     let connTxt = 'Онлайн', connC = 'var(--free)';
@@ -196,7 +197,7 @@
       <nav class="tabs" aria-label="Лінії">${tabs.map((x) => {
         const on = ui.view === x.id;
         const cnt = x.red ? (x.n > 0 ? 'cnt red' : 'cnt') : (x.n > 0 ? 'cnt hot' : 'cnt');
-        return `<button class="btn tab${on ? ' on' : ''}${x.red && s && s.alert.on ? ' red' : ''}" data-act="view" data-id="${esc(x.id)}"><span>${esc(x.label)}</span><span class="${cnt} num">${x.n}</span></button>`;
+        return `<button class="btn tab${on ? ' on' : ''}${x.red && s && s.alert.on ? ' red' : ''}" data-act="view" data-id="${esc(x.id)}"><span>${esc(x.label)}</span>${x.n == null ? '' : `<span class="${cnt} num">${x.n}</span>`}</button>`;
       }).join('')}</nav>
       <div class="head-right">
         <div class="conn"><span class="dot" style="background:${connC}"></span><span>${connTxt}</span><span class="num" style="color:var(--text);font-weight:600;margin-left:6px">${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}</span></div>
@@ -245,6 +246,7 @@
     if (!s.ami) out += '<div class="warn">Немає зв\'язку з Asterisk. Дані на екрані можуть бути застарілими, дашборд перепідключається автоматично.</div>';
     if (s.alert.on) out += alertBanner(s);
     if (ui.view === 'alert' && isAdmin()) return out + alertView(s);
+    if (ui.view === 'stats' && isAdmin()) return out + statsView();
     const line = s.lines.find((l) => l.id === ui.view);
     if (!line && ui.view !== 'all') ui.view = 'all';
     if (!ui.tv) out += panelToggles(s, line);
@@ -497,7 +499,73 @@
       ui.histBusy = false; render();
     }
   }
-  async function downloadXlsx(href) {
+  // ---------- вкладка «Статистика»: доба × оператор зв'язку, як у ручному звіті ----------
+  function statsRange(kind) {
+    const today = shiftToday();
+    const from = new Date(today), to = new Date(today);
+    if (kind === 'yesterday') { from.setDate(from.getDate() - 1); to.setDate(to.getDate() - 1); }
+    else if (kind === '7') from.setDate(from.getDate() - 6);
+    else if (kind === 'month') from.setDate(1);
+    return [isoDay(from), isoDay(to)];
+  }
+  async function loadStats() {
+    if (!ui.stFrom) [ui.stFrom, ui.stTo] = statsRange('today');
+    ui.stBusy = true; ui.stErr = ''; render();
+    try {
+      ui.st = await api(`/api/stats/daily?from=${ui.stFrom}&to=${ui.stTo}`);
+    } catch (err) {
+      ui.stErr = err.message; ui.st = null;
+    } finally {
+      ui.stBusy = false; render();
+    }
+  }
+  function statsTable(title, carriers, answered, ivr, lost) {
+    const n = carriers.length;
+    return `<section class="card st-card" aria-label="${esc(title)}">
+      <div class="card-h"><h2>${esc(title)}</h2></div>
+      <table class="st-table num">
+        <thead><tr><th></th><th>Прийнято</th><th>Прослухані IVR та втрачені</th><th>Втрачені</th></tr></thead>
+        <tbody>${carriers.map((c, i) => `<tr><td class="st-name">${esc(c.name)}</td><td>${c.answered}</td><td>${c.ivr}</td>${i === 0 ? `<td rowspan="${n}" class="st-lost">${lost}</td>` : ''}</tr>`).join('')}</tbody>
+        <tfoot><tr><td class="st-name">Всього:</td><td>${answered}</td><td>${ivr}</td><td>${lost}</td></tr></tfoot>
+      </table></section>`;
+  }
+  function statsView() {
+    if (!ui.st && !ui.stBusy && !ui.stErr) { setTimeout(loadStats, 0); ui.stBusy = true; }
+    const st = ui.st;
+    const dmy = (x) => `${x.slice(8, 10)}.${x.slice(5, 7)}.${x.slice(0, 4)}`;
+    const next = (x) => { const d = new Date(`${x}T12:00:00`); d.setDate(d.getDate() + 1); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)}`; };
+    const q = (k, label) => `<button class="btn" data-act="stQuick" data-id="${k}">${label}</button>`;
+    let body = '';
+    if (ui.stErr) body = `<div class="card empty" style="color:var(--danger)">${esc(ui.stErr)}</div>`;
+    else if (!st) body = '<div class="card empty">Завантаження…</div>';
+    else {
+      const hh = `${p2(st.dayHour)}:00`;
+      const days = st.days.slice().reverse();
+      if (days.length > 1) {
+        const sum = new Map();
+        for (const d of days) for (const c of d.carriers) {
+          const s = sum.get(c.name) || { name: c.name, answered: 0, ivr: 0 };
+          s.answered += c.answered; s.ivr += c.ivr; sum.set(c.name, s);
+        }
+        const tot = (f) => days.reduce((a, d) => a + d[f], 0);
+        body += statsTable(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, [...sum.values()], tot('answered'), tot('ivr'), tot('lost'));
+      }
+      body += days.map((d) => statsTable(`Доба ${dmy(d.day)} · ${hh} – ${hh} ${next(d.day)}`, d.carriers, d.answered, d.ivr, d.lost)).join('');
+    }
+    const href = `/api/stats/export.xlsx?from=${esc(ui.stFrom || '')}&to=${esc(ui.stTo || '')}`;
+    return `<div class="qhead"><div><h1>Статистика</h1>
+        <div class="muted" style="font-size:14px">Три лінії разом, по операторах зв'язку. Доба — з ${p2((st && st.dayHour) ?? 8)}:00 до ${p2((st && st.dayHour) ?? 8)}:00. Дзвінки під час тривоги сюди не входять.</div></div></div>
+      <div class="panels">
+        ${q('today', 'Поточна доба')}${q('yesterday', 'Вчора')}${q('7', '7 днів')}${q('month', 'Цей місяць')}
+        <label class="small muted" for="stFrom">з</label><input id="stFrom" class="inp" type="date" value="${esc(ui.stFrom || '')}" style="min-height:36px;padding:4px 8px">
+        <label class="small muted" for="stTo">по</label><input id="stTo" class="inp" type="date" value="${esc(ui.stTo || '')}" style="min-height:36px;padding:4px 8px">
+        <button class="btn" data-act="stLoad" ${ui.stBusy ? 'disabled' : ''}>Показати</button>
+        <button class="btn btn-primary" data-act="stXlsx" data-href="${href}" ${ui.xlsxBusy ? 'disabled' : ''}>⬇ Завантажити в Excel</button>
+      </div>
+      <div class="st-grid">${body}</div>`;
+  }
+
+  async function downloadXlsx(href, name) {
     ui.xlsxBusy = true; render();
     try {
       const r = await fetch(href, { credentials: 'same-origin' });
@@ -505,7 +573,7 @@
       const blob = await r.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `Тривоги_${ui.histFrom}_${ui.histTo}.xlsx`;
+      a.download = name || `Тривоги_${ui.histFrom}_${ui.histTo}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     } catch (err) {
@@ -590,6 +658,13 @@
         break;
       case 'view': ui.view = d.id; render(); break;
       case 'histXlsx': downloadXlsx(d.href); break;
+      case 'stXlsx': downloadXlsx(d.href, `Статистика_${ui.stFrom}_${ui.stTo}.xlsx`); break;
+      case 'stQuick': [ui.stFrom, ui.stTo] = statsRange(d.id); loadStats(); break;
+      case 'stLoad': {
+        const f = document.getElementById('stFrom').value, t = document.getElementById('stTo').value;
+        if (!f || !t || f > t) { toast('Вкажіть дати: «з» не пізніше за «по»'); break; }
+        ui.stFrom = f; ui.stTo = t; loadStats(); break;
+      }
       case 'histQuick': [ui.histFrom, ui.histTo] = histRange(d.id); loadHistory(); break;
       case 'histLoad': {
         const f = document.getElementById('histFrom').value, t = document.getElementById('histTo').value;
@@ -627,6 +702,8 @@
     if (e.target.id === 'addExt') ui.addExt = e.target.value;
     if (e.target.id === 'histFrom' && e.target.value) ui.histFrom = e.target.value;
     if (e.target.id === 'histTo' && e.target.value) ui.histTo = e.target.value;
+    if (e.target.id === 'stFrom' && e.target.value) ui.stFrom = e.target.value;
+    if (e.target.id === 'stTo' && e.target.value) ui.stTo = e.target.value;
   });
   document.addEventListener('keydown', (e) => {
     if (ui.tv && e.key === 'Escape') { location.href = tvUrl(false); return; }

@@ -108,6 +108,19 @@ main{max-width:1600px;margin:0 auto;padding:24px;display:flex;flex-direction:col
 .atile.big{background:color-mix(in srgb,var(--danger) 10%,transparent);border:2px solid var(--danger)}
 .agrid{display:grid;grid-template-columns:.8fr .8fr .9fr .7fr .7fr 1fr .7fr;gap:12px;padding:12px 20px;align-items:center;border-bottom:1px solid var(--line)}
 
+/* вкладка «Статистика» — таблиці як у ручному звіті */
+.st-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px;align-items:start}
+.st-card{overflow:hidden}
+.st-table{width:100%;border-collapse:collapse;font-size:15px}
+.st-table th,.st-table td{border:1px solid var(--border);padding:8px 12px;text-align:center}
+.st-table th{font-size:13px;font-weight:600;color:var(--text2);background:var(--head)}
+.st-table th:first-child{background:transparent;border-left:0}
+.st-table td.st-name{text-align:left;font-style:italic;font-weight:600}
+.st-table td.st-lost{font-size:22px;font-weight:800;color:var(--danger);vertical-align:middle}
+.st-table tfoot td{font-weight:800;background:var(--head)}
+.st-table tr>*:first-child{border-left:0}.st-table tr>*:last-child{border-right:0}
+.st-table tbody tr:hover td{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:12px;padding:12px 18px;font-size:14px;box-shadow:var(--shadow);display:none;max-width:calc(100vw - 32px)}
 #toast.show{display:block}
 

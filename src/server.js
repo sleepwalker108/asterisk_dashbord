@@ -9,7 +9,7 @@ import { LiveState } from './state.js';
 import { Stats, hm } from './stats.js';
 import { Store } from './store.js';
 import { verifyPassword, fingerprint, LoginLimiter } from './auth.js';
-import { buildXlsx } from './xlsx.js';
+import { buildXlsx, cellRef } from './xlsx.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const log = {
@@ -153,6 +153,50 @@ function alertsWorkbook(hist) {
   return buildXlsx([
     { name: 'По днях', rows: byDay, widths: [22, ...titles.map(() => 16), 12] },
     { name: 'Тривоги', rows: alerts, widths: [5, 18, 18, 12, 15, ...titles.map(() => 16), 16] },
+  ]);
+}
+
+// ---------- Excel: добова статистика по операторах зв'язку ----------
+function statsWorkbook(st) {
+  const two = (n) => String(n).padStart(2, '0');
+  const dmy = (s) => `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
+  const nextDmy = (s) => { const d = new Date(`${s}T12:00:00`); d.setDate(d.getDate() + 1); return `${two(d.getDate())}.${two(d.getMonth() + 1)}`; };
+  const hh = `${two(st.dayHour)}:00`;
+  const B = (v, extra = {}) => ({ v, border: true, center: true, ...extra });
+
+  // «Зведення»: для кожної доби — таблиця як у ручному звіті
+  const rows = [];
+  const merges = [];
+  const block = (title, carriers, answered, ivr, lost) => {
+    rows.push([{ v: title, bold: true }]);
+    rows.push([B(''), B('Прийнято', { bold: true }), B('Прослухані IVR та втрачені', { bold: true }), B('Втрачені', { bold: true })]);
+    const first = rows.length;
+    carriers.forEach((c, i) => rows.push([{ v: c.name, border: true, italic: true }, B(c.answered), B(c.ivr), B(i === 0 ? lost : '')]));
+    if (carriers.length > 1) merges.push(`${cellRef(first, 3)}:${cellRef(first + carriers.length - 1, 3)}`);
+    rows.push([{ v: 'Всього:', border: true, bold: true, italic: true }, B(answered, { bold: true }), B(ivr, { bold: true }), B(lost, { bold: true })]);
+    rows.push([]);
+  };
+  if (st.days.length > 1) {
+    const sum = new Map();
+    for (const d of st.days) for (const c of d.carriers) {
+      const s = sum.get(c.name) || { name: c.name, answered: 0, ivr: 0 };
+      s.answered += c.answered; s.ivr += c.ivr; sum.set(c.name, s);
+    }
+    const tot = (f) => st.days.reduce((a, d) => a + d[f], 0);
+    block(`Разом за період ${dmy(st.from)} – ${dmy(st.to)}`, [...sum.values()], tot('answered'), tot('ivr'), tot('lost'));
+  }
+  for (const d of st.days) block(`Доба ${dmy(d.day)} (${hh} – ${hh} ${nextDmy(d.day)})`, d.carriers, d.answered, d.ivr, d.lost);
+
+  // «По днях»: плоска таблиця для фільтрів і графіків
+  const flat = [['Дата', 'Оператор зв\'язку', 'Прийнято', 'Прослухані IVR та втрачені', 'Втрачені в черзі']];
+  for (const d of st.days) {
+    for (const c of d.carriers) flat.push([dmy(d.day), c.name, c.answered, c.ivr, '']);
+    flat.push([{ v: dmy(d.day), bold: true }, { v: 'Всього', bold: true }, { v: d.answered, bold: true }, { v: d.ivr, bold: true }, { v: d.lost, bold: true }]);
+  }
+
+  return buildXlsx([
+    { name: 'Зведення', rows, merges, widths: [24, 14, 26, 12], freeze: false, headerBold: false },
+    { name: 'По днях', rows: flat, widths: [12, 18, 12, 26, 16] },
   ]);
 }
 
@@ -332,6 +376,28 @@ const server = http.createServer(async (req, res) => {
         }
         return send(res, 200, alertsWorkbook(hist), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
           'Content-Disposition': `attachment; filename="alerts_${from}_${to}.xlsx"; filename*=UTF-8''${encodeURIComponent(`Тривоги_${from}_${to}.xlsx`)}`,
+        });
+      }
+      if (req.method === 'GET' && (p === '/api/stats/daily' || p === '/api/stats/export.xlsx')) {
+        if (sess.role !== 'admin') return send(res, 403, { error: 'Лише для адміністратора' });
+        if (!stats.enabled) return send(res, 503, { error: 'База даних вимкнена в конфігу' });
+        const from = url.searchParams.get('from') || '';
+        const to = url.searchParams.get('to') || '';
+        const re = /^\d{4}-\d{2}-\d{2}$/;
+        const span = (Date.parse(to) - Date.parse(from)) / 86400e3;
+        if (!re.test(from) || !re.test(to) || !(span >= 0) || span > 186) {
+          return send(res, 400, { error: 'Невірний період (максимум пів року)' });
+        }
+        let st;
+        try {
+          st = await stats.dailyStats(from, to);
+        } catch (err) {
+          log.warn(`[db] статистика по днях: ${err.message}`);
+          return send(res, 502, { error: 'Не вдалося прочитати базу' });
+        }
+        if (p === '/api/stats/daily') return send(res, 200, st);
+        return send(res, 200, statsWorkbook(st), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
+          'Content-Disposition': `attachment; filename="stats_${from}_${to}.xlsx"; filename*=UTF-8''${encodeURIComponent(`Статистика_${from}_${to}.xlsx`)}`,
         });
       }
       if (req.method === 'GET' && p === '/api/audit') {
