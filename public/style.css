@@ -110,7 +110,7 @@ main{max-width:1600px;margin:0 auto;padding:24px;display:flex;flex-direction:col
 
 /* вкладка «Статистика» — таблиці як у ручному звіті */
 .st-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
-.st-table{min-width:980px}
+.st-table{min-width:760px}
 .st-table th.st-line{font-size:15px;font-weight:800;color:var(--text);background:color-mix(in srgb,var(--accent) 10%,var(--head))}
 .st-table .st-g{border-left:2px solid var(--border2)}
 .st-table .st-all{background:color-mix(in srgb,var(--accent) 6%,transparent);font-weight:700}

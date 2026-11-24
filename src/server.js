@@ -206,9 +206,8 @@ function statsWorkbook(st) {
   const hh = `${two(st.dayHour)}:00`;
   const B = (v, extra = {}) => ({ v, border: true, center: true, ...extra });
 
-  // групи колонок: кожна лінія + «Усі лінії»
-  const groupsOf = (d) => d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost }))
-    .concat([{ title: 'Усі лінії', rows: d.carriers, answered: d.answered, ivr: d.ivr, lost: d.lost }]);
+  // групи колонок: кожна лінія окремо
+  const groupsOf = (d) => d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost }));
 
   // «Зведення»: для кожної доби — таблиця як у ручному звіті, з групами колонок по лініях
   const rows = [];
@@ -249,7 +248,7 @@ function statsWorkbook(st) {
     }
   }
 
-  const ng = st.lines.length + 1;
+  const ng = st.lines.length;
   return buildXlsx([
     { name: 'Зведення', rows, merges, widths: [16].concat(...Array.from({ length: ng }, () => [11, 17, 10])), freeze: false, headerBold: false },
     { name: 'По днях', rows: flat, widths: [12, 16, 18, 12, 26, 16] },

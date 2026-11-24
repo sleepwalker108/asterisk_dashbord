@@ -533,11 +533,10 @@
     return { lines, carriers, answered: days.reduce((a, d) => a + d.answered, 0), ivr: days.reduce((a, d) => a + d.ivr, 0), lost: days.reduce((a, d) => a + d.lost, 0) };
   }
 
-  // Таблиця доби: рядки — оператори зв'язку; групи колонок — кожна лінія і «Усі лінії»
+  // Таблиця доби: рядки — оператори зв'язку; групи колонок — кожна лінія
   function statsTable(title, d) {
     const n = d.carriers.length;
-    const groups = d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost, cls: '' }))
-      .concat([{ title: 'Усі лінії', rows: d.carriers, answered: d.answered, ivr: d.ivr, lost: d.lost, cls: ' st-all' }]);
+    const groups = d.lines.map((l) => ({ title: l.title, rows: l.carriers, answered: l.answered, ivr: l.ivr, lost: l.lost, cls: '' }));
     const cell = (g, i) => {
       const r = g.rows.find((x) => x.name === d.carriers[i].name) || { answered: 0, ivr: 0 };
       return `<td class="st-g${g.cls}">${r.answered}</td><td class="${g.cls.trim()}">${r.ivr}</td>${i === 0 ? `<td rowspan="${n}" class="st-lost${g.cls}">${g.lost}</td>` : ''}`;
