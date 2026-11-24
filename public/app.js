@@ -13,6 +13,7 @@
     showCalls: load('qd-showCalls', true),
     snap: null, offset: 0, wsOk: false,
     addExt: '', loginErr: '', busy: false,
+    acOpen: load('qd-acOpen', false), // блок «оператори зв'язку під час тривоги» — згорнутий за замовчуванням
   };
 
   function load(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }
@@ -668,9 +669,21 @@
     const prevDis = i <= 0 ? 'disabled' : '';
     const nextDis = i >= h.days.length - 1 ? 'disabled' : '';
     const options = daysDesc.map((d) => `<option value="${d.day}" ${d.day === ui.acDay ? 'selected' : ''}>${dmy(d.day)} — ${d.total ? d.total + ' дзв.' : 'немає'}</option>`).join('');
-    return `<div class="qhead" style="margin-top:8px"><div><h1 style="font-size:22px">З яких операторів зв'язку дзвонили під час тривоги</h1>
-        <div class="muted" style="font-size:14px">Ліворуч — разом за вибраний період, праворуч — одна доба: перемикайте стрілками або виберіть дату.</div></div></div>
-      <div class="st-grid" style="grid-template-columns:repeat(auto-fill,minmax(560px,1fr))">
+    // блок згортається; у згорнутому вигляді — один рядок з підсумком за період
+    const open = !!ui.acOpen;
+    const totals = [...sum.values()];
+    const all = totals.reduce((a, r) => a + r.total, 0);
+    const summary = `Разом за період: <b style="color:${all ? 'var(--danger)' : 'inherit'}">${all}</b> дзв.`
+      + totals.filter((r) => r.total).map((r) => ` · ${esc(r.name)} <b>${r.total}</b>`).join('');
+    const head = `<button class="btn ac-toggle" data-act="acToggle" aria-expanded="${open}">
+        <span class="ac-arrow">${open ? '▾' : '▸'}</span>
+        <span style="font-size:18px;font-weight:800">З яких операторів зв'язку дзвонили під час тривоги</span>
+        <span class="muted small num" style="font-weight:500">${open ? 'Згорнути' : summary}</span>
+      </button>`;
+    if (!open) return `<section class="card" style="padding:4px">${head}</section>`;
+    return `<section class="card" style="padding:4px">${head}
+      <div class="muted small" style="padding:4px 14px 10px">Ліворуч — разом за вибраний період, праворуч — одна доба: перемикайте стрілками або виберіть дату.</div>
+      <div class="st-grid" style="grid-template-columns:repeat(auto-fill,minmax(560px,1fr));padding:0 12px 12px">
         ${alertCarrierTable(`Разом за період ${dmy(h.from)} – ${dmy(h.to)}`, h.lines, [...sum.values()])}
         <div style="display:flex;flex-direction:column;gap:10px">
           <div class="panels" role="group" aria-label="Вибір доби">
@@ -680,7 +693,7 @@
           </div>
           ${alertCarrierTable(`Доба ${dmy(cur.day)}${cur.total ? '' : ' · тривожних дзвінків не було'}`, h.lines, cur.carriers)}
         </div>
-      </div>`;
+      </div></section>`;
   }
 
   // ---------- дії ----------
@@ -725,6 +738,7 @@
         break;
       case 'view': ui.view = d.id; render(); break;
       case 'histXlsx': downloadXlsx(d.href); break;
+      case 'acToggle': ui.acOpen = !ui.acOpen; save('qd-acOpen', ui.acOpen); render(); break;
       case 'acPrev': case 'acNext': {
         const days = (ui.hist && ui.hist.days) || [];
         const i = days.findIndex((x) => x.day === ui.acDay) + (d.act === 'acNext' ? 1 : -1);
