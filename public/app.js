@@ -777,7 +777,23 @@
     }
   });
 
-  document.addEventListener('pointerdown', () => { ui.pointerDown = true; });
+  // Вибір доби у випадному списку. Браузер не надсилає pointerup зі свого списку,
+  // тож скидаємо «кнопка натиснута» самі — інакше сторінка оновиться лише після наступного кліку.
+  function pickAcDay(sel) {
+    if (sel.value === ui.acDay) return;
+    ui.acDay = sel.value;
+    ui.pointerDown = false;
+    ui.pendingRender = false;
+    sel.blur();
+    render();
+  }
+  document.addEventListener('change', (e) => { if (e.target.id === 'acDaySel') pickAcDay(e.target); });
+
+  document.addEventListener('pointerdown', (e) => {
+    // клік по самому списку не блокує перемальовування: вибір у ньому обробляє pickAcDay
+    if (e.target && e.target.tagName === 'SELECT') return;
+    ui.pointerDown = true;
+  });
   const release = () => {
     ui.pointerDown = false;
     if (ui.pendingRender) { ui.pendingRender = false; setTimeout(render, 0); }
@@ -789,7 +805,7 @@
     if (e.target.id === 'addExt') ui.addExt = e.target.value;
     if (e.target.id === 'histFrom' && e.target.value) ui.histFrom = e.target.value;
     if (e.target.id === 'histTo' && e.target.value) ui.histTo = e.target.value;
-    if (e.target.id === 'acDaySel') { ui.acDay = e.target.value; e.target.blur(); render(); }
+    if (e.target.id === 'acDaySel') pickAcDay(e.target);
     if (e.target.id === 'stFrom' && e.target.value) ui.stFrom = e.target.value;
     if (e.target.id === 'stTo' && e.target.value) ui.stTo = e.target.value;
   });
