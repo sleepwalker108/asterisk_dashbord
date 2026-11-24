@@ -144,7 +144,7 @@
     if (ui.pointerDown) { ui.pendingRender = true; return; }
     // поки вибирають дату, не перемальовуємо — інакше календар закриється
     const ae = document.activeElement;
-    if (ae && ae.type === 'date') {
+    if (ae && (ae.type === 'date' || ae.tagName === 'SELECT')) {
       ui.pendingRender = true;
       if (!ae.dataset.qdBound) { ae.dataset.qdBound = '1'; ae.addEventListener('blur', () => { if (ui.pendingRender) { ui.pendingRender = false; setTimeout(render, 0); } }); }
       return;
@@ -658,12 +658,28 @@
       s.total += r.total;
       sum.set(r.name, s);
     }
-    const busy = h.days.filter((d) => d.total > 0).reverse();
+    // вибрана доба: якщо ще не вибрана або випала з періоду — остання доба з дзвінками (або просто остання)
+    const daysDesc = h.days.slice().reverse();
+    if (!ui.acDay || !h.days.some((d) => d.day === ui.acDay)) {
+      ui.acDay = (daysDesc.find((d) => d.total > 0) || daysDesc[0]).day;
+    }
+    const i = h.days.findIndex((d) => d.day === ui.acDay);
+    const cur = h.days[i];
+    const prevDis = i <= 0 ? 'disabled' : '';
+    const nextDis = i >= h.days.length - 1 ? 'disabled' : '';
+    const options = daysDesc.map((d) => `<option value="${d.day}" ${d.day === ui.acDay ? 'selected' : ''}>${dmy(d.day)} — ${d.total ? d.total + ' дзв.' : 'немає'}</option>`).join('');
     return `<div class="qhead" style="margin-top:8px"><div><h1 style="font-size:22px">З яких операторів зв'язку дзвонили під час тривоги</h1>
-        <div class="muted" style="font-size:14px">За вибраний період. Нижче — окремо кожна доба, у яку були такі дзвінки.</div></div></div>
+        <div class="muted" style="font-size:14px">Ліворуч — разом за вибраний період, праворуч — одна доба: перемикайте стрілками або виберіть дату.</div></div></div>
       <div class="st-grid" style="grid-template-columns:repeat(auto-fill,minmax(560px,1fr))">
         ${alertCarrierTable(`Разом за період ${dmy(h.from)} – ${dmy(h.to)}`, h.lines, [...sum.values()])}
-        ${busy.map((d) => alertCarrierTable(`Доба ${dmy(d.day)}`, h.lines, d.carriers)).join('')}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="panels" role="group" aria-label="Вибір доби">
+            <button class="btn" data-act="acPrev" ${prevDis} aria-label="Попередня доба">◀ Попередня</button>
+            <select id="acDaySel" class="inp" style="min-height:36px;padding:4px 8px" aria-label="Доба">${options}</select>
+            <button class="btn" data-act="acNext" ${nextDis} aria-label="Наступна доба">Наступна ▶</button>
+          </div>
+          ${alertCarrierTable(`Доба ${dmy(cur.day)}${cur.total ? '' : ' · тривожних дзвінків не було'}`, h.lines, cur.carriers)}
+        </div>
       </div>`;
   }
 
@@ -709,6 +725,12 @@
         break;
       case 'view': ui.view = d.id; render(); break;
       case 'histXlsx': downloadXlsx(d.href); break;
+      case 'acPrev': case 'acNext': {
+        const days = (ui.hist && ui.hist.days) || [];
+        const i = days.findIndex((x) => x.day === ui.acDay) + (d.act === 'acNext' ? 1 : -1);
+        if (days[i]) { ui.acDay = days[i].day; render(); }
+        break;
+      }
       case 'stXlsx': downloadXlsx(d.href, `Статистика_${ui.stFrom}_${ui.stTo}.xlsx`); break;
       case 'stQuick': [ui.stFrom, ui.stTo] = statsRange(d.id); loadStats(); break;
       case 'stLoad': {
@@ -753,6 +775,7 @@
     if (e.target.id === 'addExt') ui.addExt = e.target.value;
     if (e.target.id === 'histFrom' && e.target.value) ui.histFrom = e.target.value;
     if (e.target.id === 'histTo' && e.target.value) ui.histTo = e.target.value;
+    if (e.target.id === 'acDaySel') { ui.acDay = e.target.value; e.target.blur(); render(); }
     if (e.target.id === 'stFrom' && e.target.value) ui.stFrom = e.target.value;
     if (e.target.id === 'stTo' && e.target.value) ui.stTo = e.target.value;
   });
