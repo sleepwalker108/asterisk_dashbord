@@ -200,21 +200,35 @@ export class Stats {
     const prefix = (this.cfg.trunkChannelPrefix || '') + '%';
     const zero = () => Object.fromEntries(ids.map((id) => [id, 0]));
 
-    // заготовка: усі дні діапазону з нулями
+    // оператори зв'язку (з CDR userfield), як на вкладці «Статистика»
+    const carriers = this.carrierList();
+    const codeOf = this.carrierCodeOf(carriers);
+
+    // заготовка: усі дні діапазону з нулями; byCarrier[day][lineId][code] — розбивка по операторах зв'язку
     const days = new Map();
+    const byCarrier = new Map();
     for (const d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
-      days.set(`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, zero());
+      const key = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+      days.set(key, zero());
+      byCarrier.set(key, Object.fromEntries(ids.map((id) => [id, {}])));
     }
+    const addCarrier = (dayKey, id, uf, n) => {
+      const b = byCarrier.get(dayKey);
+      if (!b || !b[id] || !n) return;
+      const code = codeOf(uf);
+      b[id][code] = (b[id][code] || 0) + n;
+    };
 
     const [rows] = await this.pool.query(
-      `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, COUNT(*) AS c
+      `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, userfield AS uf, COUNT(*) AS c
          FROM ${this.tCdr}
         WHERE calldate >= ? AND calldate < ? AND channel LIKE ? AND dcontext IN (?) AND lastdata LIKE '%alarm%'
-        GROUP BY d, dcontext`, [sqlTime(start), sqlTime(end), prefix, ctxs]);
+        GROUP BY d, dcontext, uf`, [sqlTime(start), sqlTime(end), prefix, ctxs]);
     for (const r of rows) {
-      const day = days.get(String(r.d).slice(0, 10));
+      const key = String(r.d).slice(0, 10);
+      const day = days.get(key);
       const id = byCtx.get(r.dcontext);
-      if (day && id) day[id] += Number(r.c) || 0;
+      if (day && id) { day[id] += Number(r.c) || 0; addCarrier(key, id, r.uf, Number(r.c) || 0); }
     }
 
     // тривоги, які записав сам дашборд: рахуємо і тих, хто поклав слухавку ще до тривожного запису
@@ -224,19 +238,21 @@ export class Stats {
       if (pEnd < start.getTime() || p.start >= end.getTime()) continue;
       const calls = zero();
       const [pr] = await this.pool.query(
-        `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, COUNT(*) AS c,
+        `SELECT DATE(calldate - INTERVAL ${h} HOUR) AS d, dcontext, userfield AS uf, COUNT(*) AS c,
                 SUM(lastdata LIKE '%alarm%') AS alarm
            FROM ${this.tCdr}
           WHERE calldate >= ? AND calldate <= ? AND channel LIKE ? AND dcontext IN (?)
             AND lastapp <> 'Queue' AND lastdata NOT LIKE '%no_answer%'
-          GROUP BY d, dcontext`, [sqlTime(new Date(p.start)), sqlTime(new Date(pEnd)), prefix, ctxs]);
+          GROUP BY d, dcontext, uf`, [sqlTime(new Date(p.start)), sqlTime(new Date(pEnd)), prefix, ctxs]);
       for (const r of pr) {
         const id = byCtx.get(r.dcontext);
         if (!id) continue;
         const all = Number(r.c) || 0;
         calls[id] += all;
-        const day = days.get(String(r.d).slice(0, 10));
-        if (day) day[id] += all - (Number(r.alarm) || 0); // «alarm»-дзвінки вже пораховані вище
+        const key = String(r.d).slice(0, 10);
+        const day = days.get(key);
+        const extra = all - (Number(r.alarm) || 0); // «alarm»-дзвінки вже пораховані вище
+        if (day) { day[id] += extra; addCarrier(key, id, r.uf, extra); }
       }
       periods.push({ start: p.start, end: p.end || null, calls });
     }
@@ -244,9 +260,27 @@ export class Stats {
     return {
       from: fromDay, to: toDay, dayHour: h,
       lines: this.lines.map((l) => ({ id: l.id, title: l.title })),
-      days: [...days].map(([day, calls]) => ({ day, calls, total: ids.reduce((a, id) => a + calls[id], 0) })),
+      days: [...days].map(([day, calls]) => {
+        const b = byCarrier.get(day);
+        // рядки по операторах зв'язку: calls[lineId] і total; «Інші» — лише якщо були
+        const carrierRows = carriers.map((c) => {
+          const perLine = Object.fromEntries(ids.map((id) => [id, b[id][c.code] || 0]));
+          return { code: c.code, name: c.name, calls: perLine, total: ids.reduce((a, id) => a + perLine[id], 0) };
+        }).filter((r) => r.code || r.total);
+        return { day, calls, total: ids.reduce((a, id) => a + calls[id], 0), carriers: carrierRows };
+      }),
       periods,
     };
+  }
+
+  carrierList() {
+    return (this.cfg.carriers && this.cfg.carriers.length ? this.cfg.carriers : DEFAULT_CARRIERS)
+      .concat([{ code: '', name: 'Інші' }]);
+  }
+
+  carrierCodeOf(carriers) {
+    const known = new Set(carriers.map((c) => c.code).filter(Boolean));
+    return (uf) => (known.has(String(uf || '').trim()) ? String(uf).trim() : '');
   }
 }
 

@@ -629,7 +629,43 @@
           <button class="btn" data-act="histLoad" ${ui.histBusy ? 'disabled' : ''}>Показати</button>
           <button class="btn btn-primary" data-act="histXlsx" data-href="${xlsxHref}" ${ui.xlsxBusy ? 'disabled' : ''}>⬇ Завантажити в Excel</button>
         </div></div>
-      <div style="overflow-x:auto"><div style="min-width:640px">${table}</div></div></section>`;
+      <div style="overflow-x:auto"><div style="min-width:640px">${table}</div></div></section>
+      ${h ? alertCarriersBlock(h) : ''}`;
+  }
+
+  // Тривожні дзвінки по операторах зв'язку: рядки — оператори, колонки — лінії і «Усі лінії»
+  function alertCarrierTable(title, lines, rows) {
+    const ids = lines.map((l) => l.id);
+    const tot = Object.fromEntries(ids.map((id) => [id, rows.reduce((a, r) => a + r.calls[id], 0)]));
+    const all = ids.reduce((a, id) => a + tot[id], 0);
+    const v = (n) => `<span class="${n ? '' : 'muted'}">${n}</span>`;
+    return `<section class="card st-card" aria-label="${esc(title)}">
+      <div class="card-h"><h2>${esc(title)}</h2></div>
+      <div style="overflow-x:auto"><table class="st-table num" style="min-width:560px">
+        <thead><tr><th></th>${lines.map((l) => `<th class="st-g st-line">${esc(l.title)}</th>`).join('')}<th class="st-g st-line st-all">Усі лінії</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr><td class="st-name">${esc(r.name)}</td>${ids.map((id) => `<td class="st-g">${v(r.calls[id])}</td>`).join('')}<td class="st-g st-all" style="color:${r.total ? 'var(--danger)' : 'inherit'}">${r.total}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td class="st-name">Всього:</td>${ids.map((id) => `<td class="st-g">${tot[id]}</td>`).join('')}<td class="st-g st-all" style="color:${all ? 'var(--danger)' : 'inherit'}">${all}</td></tr></tfoot>
+      </table></div></section>`;
+  }
+
+  function alertCarriersBlock(h) {
+    if (!h.days || !h.days.length || !h.days[0].carriers) return '';
+    const dmy = (x) => `${x.slice(8, 10)}.${x.slice(5, 7)}.${x.slice(0, 4)}`;
+    // сума за період по операторах зв'язку (об'єднуємо за назвою, бо «Інші» є не щодня)
+    const sum = new Map();
+    for (const d of h.days) for (const r of d.carriers) {
+      const s = sum.get(r.name) || { name: r.name, calls: Object.fromEntries(h.lines.map((l) => [l.id, 0])), total: 0 };
+      for (const l of h.lines) s.calls[l.id] += r.calls[l.id];
+      s.total += r.total;
+      sum.set(r.name, s);
+    }
+    const busy = h.days.filter((d) => d.total > 0).reverse();
+    return `<div class="qhead" style="margin-top:8px"><div><h1 style="font-size:22px">З яких операторів зв'язку дзвонили під час тривоги</h1>
+        <div class="muted" style="font-size:14px">За вибраний період. Нижче — окремо кожна доба, у яку були такі дзвінки.</div></div></div>
+      <div class="st-grid" style="grid-template-columns:repeat(auto-fill,minmax(560px,1fr))">
+        ${alertCarrierTable(`Разом за період ${dmy(h.from)} – ${dmy(h.to)}`, h.lines, [...sum.values()])}
+        ${busy.map((d) => alertCarrierTable(`Доба ${dmy(d.day)}`, h.lines, d.carriers)).join('')}
+      </div>`;
   }
 
   // ---------- дії ----------

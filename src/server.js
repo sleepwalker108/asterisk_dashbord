@@ -150,8 +150,36 @@ function alertsWorkbook(hist) {
   });
   if (!hist.periods.length) alerts.push(['', 'За цей період дашборд не записав жодної тривоги']);
 
+  // «По операторах»: з яких операторів зв'язку дзвонили під час тривоги (за період і по кожній добі з дзвінками)
+  const B = (v, extra = {}) => ({ v, border: true, center: true, ...extra });
+  const carrierRows = [];
+  const carrierBlock = (title, rows) => {
+    carrierRows.push([{ v: title, bold: true }]);
+    carrierRows.push([B('Оператор зв\'язку', { bold: true }), ...titles.map((t) => B(t, { bold: true })), B('Усі лінії', { bold: true })]);
+    const tot = Object.fromEntries(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      carrierRows.push([{ v: r.name, border: true, italic: true }, ...ids.map((id) => B(r.calls[id])), B(r.total, { bold: true })]);
+      for (const id of ids) tot[id] += r.calls[id];
+    }
+    carrierRows.push([{ v: 'Всього:', border: true, bold: true, italic: true }, ...ids.map((id) => B(tot[id], { bold: true })),
+      B(ids.reduce((a, id) => a + tot[id], 0), { bold: true })]);
+    carrierRows.push([]);
+  };
+  if (hist.days.length && hist.days[0].carriers) {
+    const sumC = new Map();
+    for (const d of hist.days) for (const r of d.carriers) {
+      const s = sumC.get(r.name) || { name: r.name, calls: Object.fromEntries(ids.map((id) => [id, 0])), total: 0 };
+      for (const id of ids) s.calls[id] += r.calls[id];
+      s.total += r.total;
+      sumC.set(r.name, s);
+    }
+    carrierBlock(`Разом за період ${dmy(hist.from)} – ${dmy(hist.to)}`, [...sumC.values()]);
+    for (const d of hist.days.filter((x) => x.total > 0)) carrierBlock(`Доба ${dmy(d.day)}`, d.carriers);
+  }
+
   return buildXlsx([
     { name: 'По днях', rows: byDay, widths: [22, ...titles.map(() => 16), 12] },
+    { name: 'По операторах', rows: carrierRows, widths: [20, ...titles.map(() => 16), 12], freeze: false, headerBold: false },
     { name: 'Тривоги', rows: alerts, widths: [5, 18, 18, 12, 15, ...titles.map(() => 16), 16] },
   ]);
 }
